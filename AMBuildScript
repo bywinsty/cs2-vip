@@ -6,15 +6,15 @@ def ResolveEnvPath(env, folder):
     path = os.environ[env]
     if os.path.isdir(path):
       return path
-  else:
-    head = os.getcwd()
-    oldhead = None
-    while head != None and head != oldhead:
-      path = os.path.join(head, folder)
-      if os.path.isdir(path):
-        return path
-      oldhead = head
-      head, tail = os.path.split(head)
+
+  head = os.getcwd()
+  oldhead = None
+  while head != None and head != oldhead:
+    path = os.path.join(head, folder)
+    if os.path.isdir(path):
+      return path
+    oldhead = head
+    head, tail = os.path.split(head)
   return None
 
 def ResolveMMSRoot():
@@ -109,7 +109,7 @@ class MMSPluginConfig(object):
   def configure(self):
     for cxx in self.all_targets:
       if cxx.target.arch not in ['x86', 'x86_64']:
-        raise Exception('Unknown target architecture: {0}'.format(arch))
+        raise Exception('Unknown target architecture: {0}'.format(cxx.target.arch))
 
       self.configure_cxx(cxx)
 
@@ -261,7 +261,6 @@ class MMSPluginConfig(object):
     cxx.defines += ['META_IS_SOURCE2']
     binary.sources += [
       os.path.join(sdk['path'], 'public', 'tier0', 'memoverride.cpp'),
-      os.path.join(sdk['path'], 'tier1', 'generichash.cpp'),
       os.path.join(sdk['path'], 'entity2', 'entitysystem.cpp'),
       os.path.join(sdk['path'], 'entity2', 'entityidentity.cpp'),
       os.path.join(sdk['path'], 'entity2', 'entitykeyvalues.cpp'),

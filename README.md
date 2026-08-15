@@ -1,27 +1,35 @@
-# VIP system
-My Discord server - https://discord.com/invite/g798xERK5Y
+# [VIP] CORE | LIST OF MODULES - [click](https://github.com/Pisex/cs2-vip-modules)
 
-List of modules - [click](https://github.com/Pisex/cs2-vip-modules)
-# TODO List
-- [ ]  ...
+## Requirements
+- CS2 server (Linux or Windows)
+- [sql_mm](https://github.com/zer0k-z/sql_mm) plugins; sql_mm is an external dependency and is not included in the VIP release archive
+- Database data configured in `addons/configs/databases.cfg`
 
-## Require
-- CS2 Server (Linux or Windows)
-- sql_mm plugins by zer0k-z : https://github.com/zer0k-z/sql_mm (In the release archive)
-- Specify database data in the config
+For crash diagnostics, install [Accelerator](https://github.com/komashchenko/AcceleratorLocal/releases/tag/v1.0.0) and send the generated crash file.
 
-Those who can, please put [Accelerator](https://github.com/komashchenko/AcceleratorLocal/releases/tag/v1.0.0) and if the server crashes, then send the crash file so I can understand what caused it
+## Release archive
+The archive contains:
+```text
+addons/
+├── metamod/vip.vdf
+├── vip/vip.so
+├── configs/databases.cfg
+├── configs/vip/groups.ini
+├── translations/vip.phrases.txt
+└── data/vip_data.ini
+```
 
 ## Commands
 Client command:
+
 - `!vip` - plugin main menu
 
-The plugin includes the following console commands:
-- `vip_reload` - reload vip config with groups
-- `vip_remove <userid|nickname|accountid>` - take away vip access from the player
-- `vip_give <userid|nickname|accountid> <time_second> <group>` - give vip access to a player
+Console commands:
+- `vip_reload` - reload VIP configuration with groups
+- `vip_remove <userid|nickname|accountid>` - remove VIP access from a player
+- `vip_give <userid|nickname|accountid> <time_second> <group>` - give VIP access to a player
 
 ## Configuration
-- Databases file: `addons/configs/databases.cfg`
+- Database file: `addons/configs/databases.cfg`
 - Groups file: `addons/configs/vip/groups.ini`
 - Translation file: `addons/translations/vip.phrases.txt`

@@ -10,83 +10,226 @@ on:
   release:
     types:
       - created
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  HL2SDK_ROOT: "${{ github.workspace }}/external"
+  MMS_PATH: "${{ github.workspace }}/external/metamod-source"
+  MANIFEST_PATH: "${{ github.workspace }}/hl2sdk-manifests"
+  AMBUILD_REF: "d89ec91a7ac2607da07b50bb62346f9a10e9a998"
+  MMS_REF: "2667e8e5947237c4cb7ea45cec3913ad6a44757c"
+  HL2SDK_REF: "159cddd44cef4d9d607ef4ec4ac9f85cf056494c"
+  SCHEMAENTITY_REF: "e7965b3c83ec684d44584ee6457c5482ee5d9db1"
+  MANIFEST_REF: "20b3a014264b38908c4a5d4eb263ba2c488f3dc1"
 
 jobs:
   build:
-    if: "!contains(github.event.head_commit.message, '[skip ci]')"
-    permissions:
-      contents: write
-    runs-on: ubuntu-20.04
-
-    env:
-      HL2SDK_ROOT: "${{ github.workspace }}/external"
-      MMS_PATH: "${{ github.workspace }}/external/metamod-source"
-      MANIFEST_PATH: "${{ github.workspace }}/external/metamod-source/hl2sdk-manifests"
+    name: Build VIP Core
+    if: "!contains(github.event.head_commit.message || '', '[skip ci]')"
+    runs-on: ubuntu-24.04
 
     steps:
+      - name: Configure Git defaults
+        run: |
+          git config --global init.defaultBranch main
+          git config --global advice.defaultBranchName false
+
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up dependencies
         run: |
           export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update -qy
-          sudo apt-get install -y git clang-10 clang++-10 binutils
-          sudo apt-get install -y python3
+          sudo apt-get install -y git clang-18 binutils python3 python3-pip zip
+          python3 --version
+          python3 -m pip --version
+          clang-18 --version
+
           python3 -m pip install --upgrade pip importlib-metadata
           python3 -m pip install setuptools==45.2.0
-          git clone https://github.com/alliedmodders/ambuild.git
-          cd ambuild
-          pip install .
-          cd ..
-          mkdir external
-          cd external
-          git clone --recursive --branch master --single-branch https://github.com/alliedmodders/metamod-source.git
-          git clone --recursive --branch cs2 --single-branch https://github.com/alliedmodders/hl2sdk.git hl2sdk-cs2
-          cd ../..
-          git clone https://github.com/pisex/SchemaEntity.git
-          cd ${{ github.workspace }}
-          
+          git clone --depth 1 --no-checkout https://github.com/alliedmodders/ambuild.git "$GITHUB_WORKSPACE/ambuild"
+          git -C "$GITHUB_WORKSPACE/ambuild" fetch --depth 1 origin "$AMBUILD_REF"
+          git -C "$GITHUB_WORKSPACE/ambuild" checkout --detach "$AMBUILD_REF"
+          python3 -m pip install "$GITHUB_WORKSPACE/ambuild"
+
+          mkdir -p "$GITHUB_WORKSPACE/external"
+          git clone --depth 1 --no-checkout \
+            https://github.com/alliedmodders/metamod-source.git "$GITHUB_WORKSPACE/external/metamod-source"
+          git -C "$GITHUB_WORKSPACE/external/metamod-source" fetch --depth 1 origin "$MMS_REF"
+          git -C "$GITHUB_WORKSPACE/external/metamod-source" checkout --detach "$MMS_REF"
+          git -C "$GITHUB_WORKSPACE/external/metamod-source" submodule update --init --recursive
+
+          git clone --depth 1 --no-checkout \
+            https://github.com/alliedmodders/hl2sdk.git "$GITHUB_WORKSPACE/external/hl2sdk-cs2"
+          git -C "$GITHUB_WORKSPACE/external/hl2sdk-cs2" fetch --depth 1 origin "$HL2SDK_REF"
+          git -C "$GITHUB_WORKSPACE/external/hl2sdk-cs2" checkout --detach "$HL2SDK_REF"
+          git -C "$GITHUB_WORKSPACE/external/hl2sdk-cs2" submodule update --init --recursive
+
+          git clone --depth 1 --no-checkout https://github.com/pisex/SchemaEntity.git \
+            "$GITHUB_WORKSPACE/../SchemaEntity"
+          git -C "$GITHUB_WORKSPACE/../SchemaEntity" fetch --depth 1 origin "$SCHEMAENTITY_REF"
+          git -C "$GITHUB_WORKSPACE/../SchemaEntity" checkout --detach "$SCHEMAENTITY_REF"
+
+          test "$(git -C "$GITHUB_WORKSPACE/ambuild" rev-parse HEAD)" = "$AMBUILD_REF"
+          test "$(git -C "$MMS_PATH" rev-parse HEAD)" = "$MMS_REF"
+          test "$(git -C "$MMS_PATH/hl2sdk-manifests" rev-parse HEAD)" = "$MANIFEST_REF"
+          test "$(git -C "$HL2SDK_ROOT/hl2sdk-cs2" rev-parse HEAD)" = "$HL2SDK_REF"
+          test "$(git -C "$GITHUB_WORKSPACE/../SchemaEntity" rev-parse HEAD)" = "$SCHEMAENTITY_REF"
+
+          # SdkHelpers.ambuild resolves manifests relative to builder.sourcePath.
+          # Keep the exact upstream manifest checkout at the repository path it reads.
+          rm -rf "$GITHUB_WORKSPACE/hl2sdk-manifests"
+          mkdir -p "$GITHUB_WORKSPACE/hl2sdk-manifests"
+          cp -R "$MMS_PATH/hl2sdk-manifests/." "$GITHUB_WORKSPACE/hl2sdk-manifests/"
+
+          proto_path="$HL2SDK_ROOT/hl2sdk-cs2/common/network_connection.proto"
+          if ! grep -q '^syntax = ' "$proto_path"; then
+            sed -i '1i syntax = "proto2";' "$proto_path"
+          fi
+          grep -q '^syntax = "proto2";$' "$proto_path"
+
+          python3 - "$MANIFEST_PATH/manifests/cs2.json" "$HL2SDK_ROOT/hl2sdk-cs2" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          manifest_path = Path(sys.argv[1])
+          sdk_root = Path(sys.argv[2])
+          manifest = json.loads(manifest_path.read_text())
+          include_paths = manifest["include_paths"]
+          manifest["include_paths"] = [
+              path for path in include_paths if (sdk_root / path).is_dir()
+          ]
+          manifest_path.write_text(json.dumps(manifest, indent=4) + "\n")
+          PY
+
+          test ! -d "$HL2SDK_ROOT/hl2sdk-cs2/public/game/server" || \
+            grep -q '"public/game/server"' "$MANIFEST_PATH/manifests/cs2.json"
+
+          schema_root="$GITHUB_WORKSPACE/../SchemaEntity"
+          sed -i '/#include "schemasystem.h"/a #include "gametrace.h"' \
+            "$schema_root/globaltypes.h"
+          sed -i 's/NetworkStateChanged_t/NetworkStateChangedData/g' \
+            "$schema_root/schemasystem.cpp"
+          sed -i 's/FL_PAWN_FAKECLIENT/FL_BOT/g; s/FL_CONTROLLER_FAKECLIENT/FL_FAKECLIENT/g' \
+            "$schema_root/CCSPlayerPawn.h" "$schema_root/CCSPlayerController.h"
+
+          python3 - "$schema_root/ctimer.h" <<'PY'
+          import sys
+          from pathlib import Path
+
+          timer_path = Path(sys.argv[1])
+          content = timer_path.read_text()
+          if "virtual ~CTimerBase()" in content:
+              raise SystemExit("CTimerBase destructor patch is already present")
+          needle = "class CTimerBase {\npublic:\n"
+          replacement = needle + "    virtual ~CTimerBase() = default;\n"
+          if needle not in content:
+              raise SystemExit("Expected CTimerBase declaration was not found")
+          timer_path.write_text(content.replace(needle, replacement, 1))
+          PY
+
+
+          test -f "$MANIFEST_PATH/SdkHelpers.ambuild"
+          test -f "$MANIFEST_PATH/manifests/cs2.json"
+          test -f "$schema_root/schemasystem.cpp"
+          test -f "$schema_root/CCSPlayerPawn.h"
+          test -f "$schema_root/CCSPlayerController.h"
+          test -f "$HL2SDK_ROOT/hl2sdk-cs2/public/tier1/generichash.h"
+          test ! -f "$HL2SDK_ROOT/hl2sdk-cs2/tier1/generichash.cpp"
+          ! grep -q "tier1', 'generichash.cpp" "$GITHUB_WORKSPACE/AMBuildScript"
+          grep -q '#include "gametrace.h"' "$schema_root/globaltypes.h"
+          ! grep -q 'NetworkStateChanged_t' "$schema_root/schemasystem.cpp"
+          ! grep -q 'FL_PAWN_FAKECLIENT\|FL_CONTROLLER_FAKECLIENT' \
+            "$schema_root/CCSPlayerPawn.h" "$schema_root/CCSPlayerController.h"
+          grep -q 'FL_BOT' "$schema_root/CCSPlayerPawn.h"
+          grep -q 'FL_FAKECLIENT' "$schema_root/CCSPlayerController.h"
+
       - name: Configure and build plugin
+        env:
+          CC: clang-18
+          CXX: clang++-18
         run: |
+          rm -rf build
           mkdir build
           cd build
-          python3 ../configure.py -s cs2 --targets x86_64 --enable-optimize --hl2sdk-manifests=./hl2sdk-manifests --mms_path=$MMS_PATH --hl2sdk-root=$HL2SDK_ROOT
+          python3 ../configure.py \
+            --sdks cs2 \
+            --targets x86_64 \
+            --enable-optimize \
+            --hl2sdk-manifests="$MANIFEST_PATH" \
+            --mms_path="$MMS_PATH" \
+            --hl2sdk-root="$HL2SDK_ROOT"
           ambuild
 
-      - name: Create archive
+      - name: Validate and create archive
         run: |
+          test -d build/package/addons
+          expected_files="$(mktemp)"
+          actual_files="$(mktemp)"
+          cat > "$expected_files" <<'EOF'
+          configs/databases.cfg
+          configs/vip/groups.ini
+          data/vip_data.ini
+          metamod/vip.vdf
+          translations/vip.phrases.txt
+          vip/vip.so
+          EOF
+          find build/package/addons -type f -printf '%P\n' | sort > "$actual_files"
+          diff -u "$expected_files" "$actual_files"
+          rm -f "$expected_files" "$actual_files"
           cd build/package
-          zip -r ${{ github.workspace }}.zip addons
+          zip -r "$GITHUB_WORKSPACE/vip.zip" addons
+          test -s "$GITHUB_WORKSPACE/vip.zip"
+          zip -T "$GITHUB_WORKSPACE/vip.zip"
+          sha256sum "$GITHUB_WORKSPACE/vip.zip"
 
       - name: Upload archive to artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: compile
-          path: ${{ github.workspace }}.zip
+          path: vip.zip
+          if-no-files-found: error
 
   release:
+    name: Publish release
+    if: github.event_name == 'release' && github.event.action == 'created'
     needs: build
     permissions:
       contents: write
-    runs-on: ubuntu-20.04
-  
+    runs-on: ubuntu-24.04
+
     steps:
       - name: Download build artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: compile
-          path: .
-  
-      - name: List files in directory
-        run: ls -la
-  
-      - name: Find downloaded artifact
-        id: find_artifact
-        run: echo "ARTIFACT=$(ls | grep '\.zip$')" >> $GITHUB_ENV
-  
+          path: release-files
+
+      - name: Verify build artifact
+        run: |
+          test "$(find release-files -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 1
+          test "$(find release-files -maxdepth 1 -type f -name 'BUILD_REPORT.md' | wc -l)" -eq 0
+          ls -la release-files
+          zip -T release-files/*.zip
+          sha256sum release-files/*.zip
+
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          test -n "$RELEASE_TAG"
+          [[ "$RELEASE_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]
+
       - name: Upload release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
-          tag_name: ${{ github.event.head_commit.message }}
-          files: ${{ env.ARTIFACT }}
+          tag_name: ${{ github.event.release.tag_name }}
+          name: ${{ github.event.release.tag_name }}
+          target_commitish: ${{ github.event.release.target_commitish || github.sha }}
+          files: release-files/*.zip
+          fail_on_unmatched_files: true
