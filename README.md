@@ -1,6 +1,38 @@
-# [VIP] Modules
-My Discord server - https://discord.com/invite/g798xERK5Y
+# [VIP] Modules | [VIP] CORE - [click](https://github.com/bywinsty/cs2-vip)
 
-This repository contains modules for the server plugin [VIP] Core
-# TODO List
-- [ ]  ...
+## Modules
+- VIP_AntiFlash
+- VIP_AwpManager
+- VIP_BaseFunctions
+- VIP_Bhop
+- VIP_BuyTeamWeapon
+- VIP_DuckSpeed
+- VIP_Endurance
+- VIP_FOV
+- VIP_FastDefuse
+- VIP_FastPlant
+- VIP_Fortnite_Hits
+- VIP_Gravity
+- VIP_Healthshot
+- VIP_Items
+- VIP_JoinSound
+- VIP_Jumps
+- VIP_KillScreen
+- VIP_MultiTest
+- VIP_NoFallDamage
+- VIP_Penis
+- VIP_RainbowModel
+- VIP_RegenArmor
+- VIP_RegenHP
+- VIP_ResetDeaths
+- VIP_Respawn
+- VIP_ShowDamage
+- VIP_Skins
+- VIP_Smoke
+- VIP_Speed
+- VIP_Tag
+- VIP_TeammatesHeal
+- VIP_Test
+- VIP_Time
+- VIP_Vampirism
+- VIP_Vips

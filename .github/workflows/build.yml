@@ -1,0 +1,785 @@
+name: Build VIP Modules
+on:
+  push:
+    branches:
+      - main
+      - dev
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AMBUILD_REF: d89ec91a7ac2607da07b50bb62346f9a10e9a998
+  MMS_REF: 2667e8e5947237c4cb7ea45cec3913ad6a44757c
+  HL2SDK_REF: 80cf8554d716a3841fe0680013cae3411a056a8d
+  SCHEMAENTITY_REF: e7965b3c83ec684d44584ee6457c5482ee5d9db1
+  MANIFEST_REF: 20b3a014264b38908c4a5d4eb263ba2c488f3dc1
+  CACHE_VERSION: v1
+
+jobs:
+  discover:
+    runs-on: ubuntu-24.04
+    outputs:
+      modules: ${{ steps.discover.outputs.modules }}
+      count: ${{ steps.discover.outputs.count }}
+      module_count: ${{ steps.manifest_contract.outputs.module_count }}
+      package_file_count: ${{ steps.manifest_contract.outputs.package_file_count }}
+      module_archive_count: ${{ steps.manifest_contract.outputs.module_archive_count }}
+      release_archive_count: ${{ steps.manifest_contract.outputs.release_archive_count }}
+      report_count: ${{ steps.manifest_contract.outputs.report_count }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Verify LF line endings
+        run: python3 .github/scripts/check_line_endings.py
+
+      - name: Test package validator
+        run: python3 .github/scripts/test_validate_package.py
+      - name: Test manifest contract
+        run: python3 .github/scripts/test_manifest_contract.py
+      - name: Test VIP_MultiTest upgrade preflight
+        run: python3 .github/scripts/test_check_vip_multitest_upgrade.py
+      - name: Test build target defaults
+        run: python3 .github/scripts/test_build_targets.py
+      - name: Test dependency cache workflow contract
+        run: python3 .github/scripts/test_cache_workflow.py
+      - name: Test release workflow contract
+        run: python3 .github/scripts/test_release_workflow.py
+      - id: manifest_contract
+        name: Validate package manifest contract
+        run: python3 .github/scripts/manifest_contract.py --manifest .github/package-manifest.json --github-output "$GITHUB_OUTPUT"
+      - id: discover
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path.cwd()
+          required = ["AMBuildScript", "AMBuilder", "PackageScript", "configure.py", "hl2sdk-manifests/SdkHelpers.ambuild", "hl2sdk-manifests/manifests/cs2.json"]
+          entries = []
+          for module_dir in sorted(p for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")):
+              build_root = next((p for p in (module_dir, module_dir / "source", module_dir / "src") if (p / "AMBuildScript").is_file()), None)
+              if build_root is None:
+                  continue
+              missing = [item for item in required if not (build_root / item).is_file()]
+              if missing:
+                  raise SystemExit(f"{module_dir.name}: missing build files: {missing}")
+              entries.append({"module": module_dir.name, "module_dir": module_dir.relative_to(root).as_posix(), "build_root": build_root.relative_to(root).as_posix()})
+          manifest = json.loads((root / ".github/package-manifest.json").read_text(encoding="utf-8"))["packages"]
+          discovered = {entry["module"] for entry in entries}
+          manifest_modules = set(manifest)
+          if discovered != manifest_modules:
+              missing = sorted(manifest_modules - discovered)
+              extra = sorted(discovered - manifest_modules)
+              raise SystemExit(f"module/manifest mismatch; missing={missing}, extra={extra}")
+          manifest_paths = [path for package in manifest.values() for path in package["files"]]
+          if len(manifest_paths) != len(set(manifest_paths)):
+              raise SystemExit("package manifest contains duplicate file paths")
+
+          if len(entries) != len(manifest):
+              raise SystemExit(f"expected {len(manifest)} modules from package manifest, found {len(entries)}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write("modules=" + json.dumps(entries, separators=(",", ":")) + "\n")
+              out.write(f"count={len(entries)}\n")
+          PY
+
+  prepare-dependencies:
+    runs-on: ubuntu-24.04
+    outputs:
+      dependency-cache-hit: ${{ steps.restore-dependencies.outputs.cache-hit }}
+      pip-cache-hit: ${{ steps.restore-pip.outputs.cache-hit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Start dependency cache timer
+        id: cache-restore-start
+        run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+      - name: Restore pinned dependency cache
+        id: restore-dependencies
+        continue-on-error: true
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ambuild
+            external/metamod-source
+            external/hl2sdk-cs2
+            external/SchemaEntity
+          key: ${{ env.CACHE_VERSION }}-${{ runner.os }}-ubuntu24.04-${{ env.AMBUILD_REF }}-${{ env.MMS_REF }}-${{ env.HL2SDK_REF }}-${{ env.SCHEMAENTITY_REF }}-${{ env.MANIFEST_REF }}
+      - name: Restore pip cache
+        id: restore-pip
+        continue-on-error: true
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ env.CACHE_VERSION }}-ubuntu24.04-py312-${{ hashFiles('.github/workflows/build.yml') }}
+          restore-keys: |
+            pip-${{ env.CACHE_VERSION }}-ubuntu24.04-py312-
+      - name: Finish dependency cache timer
+        id: cache-restore-finish
+        if: always()
+        run: echo "finished_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+      - name: Install dependencies
+        run: |
+          start_time=$(date +%s)
+          sudo apt-get update -qy
+          sudo apt-get install -y binutils clang-18 file git libmaxminddb-dev python3 python3-pip unzip zip
+          python3 -m pip install --upgrade pip importlib-metadata
+          python3 -m pip install setuptools==45.2.0
+          echo "install_dependencies_seconds=$(( $(date +%s) - start_time ))" >> "$GITHUB_STEP_SUMMARY"
+      - name: Prepare pristine pinned dependencies
+        id: prepare
+        if: steps.restore-dependencies.outputs.cache-hit != 'true' && github.event_name != 'pull_request'
+        run: |
+          start_time=$(date +%s)
+          mkdir -p "$GITHUB_WORKSPACE/external"
+          git clone --depth 1 --no-checkout https://github.com/alliedmodders/ambuild.git "$GITHUB_WORKSPACE/ambuild"
+          git -C "$GITHUB_WORKSPACE/ambuild" fetch --depth 1 origin "$AMBUILD_REF"
+          git -C "$GITHUB_WORKSPACE/ambuild" checkout --detach "$AMBUILD_REF"
+          git clone --depth 1 --no-checkout https://github.com/alliedmodders/metamod-source.git "$GITHUB_WORKSPACE/external/metamod-source"
+          git -C "$GITHUB_WORKSPACE/external/metamod-source" fetch --depth 1 origin "$MMS_REF"
+          git -C "$GITHUB_WORKSPACE/external/metamod-source" checkout --detach "$MMS_REF"
+          git -C "$GITHUB_WORKSPACE/external/metamod-source" submodule update --init --recursive
+          git clone --depth 1 --no-checkout https://github.com/alliedmodders/hl2sdk.git "$GITHUB_WORKSPACE/external/hl2sdk-cs2"
+          git -C "$GITHUB_WORKSPACE/external/hl2sdk-cs2" fetch --depth 1 origin "$HL2SDK_REF"
+          git -C "$GITHUB_WORKSPACE/external/hl2sdk-cs2" checkout --detach "$HL2SDK_REF"
+          git -C "$GITHUB_WORKSPACE/external/hl2sdk-cs2" submodule update --init --recursive
+          schema_root="$GITHUB_WORKSPACE/external/SchemaEntity"
+          git clone --depth 1 --no-checkout https://github.com/pisex/SchemaEntity.git "$schema_root"
+          git -C "$schema_root" fetch --depth 1 origin "$SCHEMAENTITY_REF"
+          git -C "$schema_root" checkout --detach "$SCHEMAENTITY_REF"
+          test "$(git -C "$GITHUB_WORKSPACE/ambuild" rev-parse HEAD)" = "$AMBUILD_REF"
+          test "$(git -C "$GITHUB_WORKSPACE/external/metamod-source" rev-parse HEAD)" = "$MMS_REF"
+          test "$(git -C "$GITHUB_WORKSPACE/external/metamod-source/hl2sdk-manifests" rev-parse HEAD)" = "$MANIFEST_REF"
+          test "$(git -C "$GITHUB_WORKSPACE/external/hl2sdk-cs2" rev-parse HEAD)" = "$HL2SDK_REF"
+          test "$(git -C "$schema_root" rev-parse HEAD)" = "$SCHEMAENTITY_REF"
+          echo "prepare_pristine_dependencies_seconds=$(( $(date +%s) - start_time ))" >> "$GITHUB_STEP_SUMMARY"
+      - name: Validate cached pinned dependencies
+        if: steps.restore-dependencies.outputs.cache-hit == 'true'
+        run: |
+          schema_root="$GITHUB_WORKSPACE/external/SchemaEntity"
+          test "$(git -C "$GITHUB_WORKSPACE/ambuild" rev-parse HEAD)" = "$AMBUILD_REF"
+          test "$(git -C "$GITHUB_WORKSPACE/external/metamod-source" rev-parse HEAD)" = "$MMS_REF"
+          test "$(git -C "$GITHUB_WORKSPACE/external/metamod-source/hl2sdk-manifests" rev-parse HEAD)" = "$MANIFEST_REF"
+          test "$(git -C "$GITHUB_WORKSPACE/external/hl2sdk-cs2" rev-parse HEAD)" = "$HL2SDK_REF"
+          test "$(git -C "$schema_root" rev-parse HEAD)" = "$SCHEMAENTITY_REF"
+      - name: Save pristine pinned dependency cache
+        id: save-dependencies
+        if: github.event_name != 'pull_request' && steps.restore-dependencies.outputs.cache-hit != 'true' && steps.prepare.outcome == 'success'
+        continue-on-error: true
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ambuild
+            external/metamod-source
+            external/hl2sdk-cs2
+            external/SchemaEntity
+          key: ${{ env.CACHE_VERSION }}-${{ runner.os }}-ubuntu24.04-${{ env.AMBUILD_REF }}-${{ env.MMS_REF }}-${{ env.HL2SDK_REF }}-${{ env.SCHEMAENTITY_REF }}-${{ env.MANIFEST_REF }}
+      - name: Install pinned AMBuild
+        if: steps.restore-dependencies.outputs.cache-hit == 'true' || steps.prepare.outcome == 'success'
+        run: python3 -m pip install "$GITHUB_WORKSPACE/ambuild"
+      - name: Save pip cache
+        id: save-pip
+        if: github.event_name != 'pull_request' && steps.restore-pip.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ env.CACHE_VERSION }}-ubuntu24.04-py312-${{ hashFiles('.github/workflows/build.yml') }}
+      - name: Write dependency cache summary
+        if: always()
+        env:
+          CACHE_RESTORE_STARTED_AT: ${{ steps.cache-restore-start.outputs.started_at }}
+          CACHE_RESTORE_FINISHED_AT: ${{ steps.cache-restore-finish.outputs.finished_at }}
+          SDK_CACHE_PRIMARY_KEY: ${{ steps.restore-dependencies.outputs.cache-primary-key }}
+          SDK_CACHE_MATCHED_KEY: ${{ steps.restore-dependencies.outputs.cache-matched-key }}
+          DEPENDENCY_CACHE_HIT: ${{ steps.restore-dependencies.outputs.cache-hit }}
+          DEPENDENCY_RESTORE_OUTCOME: ${{ steps.restore-dependencies.outcome }}
+          DEPENDENCY_SAVE_OUTCOME: ${{ steps.save-dependencies.outcome }}
+          PIP_CACHE_PRIMARY_KEY: ${{ steps.restore-pip.outputs.cache-primary-key }}
+          PIP_CACHE_MATCHED_KEY: ${{ steps.restore-pip.outputs.cache-matched-key }}
+          PIP_CACHE_HIT: ${{ steps.restore-pip.outputs.cache-hit }}
+          PIP_RESTORE_OUTCOME: ${{ steps.restore-pip.outcome }}
+          PIP_SAVE_OUTCOME: ${{ steps.save-pip.outcome }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          cache_match_type() {
+            case "${1:-}" in
+              true) echo "exact" ;;
+              false) echo "partial" ;;
+              *) echo "miss" ;;
+            esac
+          }
+
+          restore_seconds="unavailable"
+          if [[ "${CACHE_RESTORE_STARTED_AT:-}" =~ ^[0-9]+$ && "${CACHE_RESTORE_FINISHED_AT:-}" =~ ^[0-9]+$ ]]; then
+            restore_seconds="$((CACHE_RESTORE_FINISHED_AT - CACHE_RESTORE_STARTED_AT))"
+          fi
+
+          {
+            echo "### Dependency cache"
+            echo "- Event: \`$EVENT_NAME\`"
+            echo "- SDK cache key: \`${{ env.CACHE_VERSION }}-${{ runner.os }}-ubuntu24.04-${{ env.AMBUILD_REF }}-${{ env.MMS_REF }}-${{ env.HL2SDK_REF }}-${{ env.SCHEMAENTITY_REF }}-${{ env.MANIFEST_REF }}\`"
+            echo "- SDK requested key: \`${SDK_CACHE_PRIMARY_KEY:-unavailable}\`"
+            echo "- SDK matched key: \`${SDK_CACHE_MATCHED_KEY:-none}\`"
+            echo "- SDK restore: \`$(cache_match_type \"$DEPENDENCY_CACHE_HIT\")\` (outcome: \`${DEPENDENCY_RESTORE_OUTCOME:-unknown}\`)"
+            echo "- SDK save: \`${DEPENDENCY_SAVE_OUTCOME:-skipped}\`"
+            echo "- pip cache key: \`pip-${{ env.CACHE_VERSION }}-ubuntu24.04-py312-${{ hashFiles('.github/workflows/build.yml') }}\`"
+            echo "- pip requested key: \`${PIP_CACHE_PRIMARY_KEY:-unavailable}\`"
+            echo "- pip matched key: \`${PIP_CACHE_MATCHED_KEY:-none}\`"
+            echo "- pip restore: \`$(cache_match_type \"$PIP_CACHE_HIT\")\` (outcome: \`${PIP_RESTORE_OUTCOME:-unknown}\`)"
+            echo "- pip save: \`${PIP_SAVE_OUTCOME:-skipped}\`"
+            echo "- Restore window (SDK + pip): \`${restore_seconds}s\`"
+            echo "- Cache writes from pull requests: disabled"
+            echo "- Pinned refs: AMBuild=\`$AMBUILD_REF\`, MMS=\`$MMS_REF\`, HL2SDK=\`$HL2SDK_REF\`, SchemaEntity=\`$SCHEMAENTITY_REF\`, manifest=\`$MANIFEST_REF\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build-module:
+    needs: [discover, prepare-dependencies]
+    if: ${{ needs.discover.result == 'success' && needs.prepare-dependencies.result == 'success' }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include: ${{ fromJSON(needs.discover.outputs.modules) }}
+    env:
+      MODULE_DIR: ${{ matrix.module_dir }}
+      BUILD_ROOT: ${{ matrix.build_root }}
+      MANIFEST_PATH: ${{ github.workspace }}/${{ matrix.build_root }}/hl2sdk-manifests
+      PACKAGE_DIR: vip_modules
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Start dependency cache timer
+        id: cache-restore-start
+        run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+      - name: Restore pinned dependency cache
+        id: restore-dependencies
+        continue-on-error: true
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ambuild
+            external/metamod-source
+            external/hl2sdk-cs2
+            external/SchemaEntity
+          key: ${{ env.CACHE_VERSION }}-${{ runner.os }}-ubuntu24.04-${{ env.AMBUILD_REF }}-${{ env.MMS_REF }}-${{ env.HL2SDK_REF }}-${{ env.SCHEMAENTITY_REF }}-${{ env.MANIFEST_REF }}
+      - name: Restore pip cache
+        id: restore-pip
+        continue-on-error: true
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ env.CACHE_VERSION }}-ubuntu24.04-py312-${{ hashFiles('.github/workflows/build.yml') }}
+          restore-keys: |
+            pip-${{ env.CACHE_VERSION }}-ubuntu24.04-py312-
+      - name: Finish dependency cache timer
+        id: cache-restore-finish
+        if: always()
+        run: echo "finished_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qy
+          sudo apt-get install -y binutils clang-18 file git libmaxminddb-dev python3 python3-pip unzip zip
+          python3 -m pip install --upgrade pip importlib-metadata
+          python3 -m pip install setuptools==45.2.0
+      - name: Restore or checkout pinned dependencies
+        id: checkout-pinned-dependencies
+        env:
+          DEPENDENCY_CACHE_HIT: ${{ steps.restore-dependencies.outputs.cache-hit }}
+        run: |
+          start_time=$(date +%s)
+          mkdir -p "$GITHUB_WORKSPACE/external"
+          if [[ "$DEPENDENCY_CACHE_HIT" != "true" ]]; then
+            git clone --depth 1 --no-checkout https://github.com/alliedmodders/ambuild.git "$GITHUB_WORKSPACE/ambuild"
+            git -C "$GITHUB_WORKSPACE/ambuild" fetch --depth 1 origin "$AMBUILD_REF"
+            git -C "$GITHUB_WORKSPACE/ambuild" checkout --detach "$AMBUILD_REF"
+            git clone --depth 1 --no-checkout https://github.com/alliedmodders/metamod-source.git "$GITHUB_WORKSPACE/external/metamod-source"
+            git -C "$GITHUB_WORKSPACE/external/metamod-source" fetch --depth 1 origin "$MMS_REF"
+            git -C "$GITHUB_WORKSPACE/external/metamod-source" checkout --detach "$MMS_REF"
+            git -C "$GITHUB_WORKSPACE/external/metamod-source" submodule update --init --recursive
+            git clone --depth 1 --no-checkout https://github.com/alliedmodders/hl2sdk.git "$GITHUB_WORKSPACE/external/hl2sdk-cs2"
+            git -C "$GITHUB_WORKSPACE/external/hl2sdk-cs2" fetch --depth 1 origin "$HL2SDK_REF"
+            git -C "$GITHUB_WORKSPACE/external/hl2sdk-cs2" checkout --detach "$HL2SDK_REF"
+            git -C "$GITHUB_WORKSPACE/external/hl2sdk-cs2" submodule update --init --recursive
+            schema_root="$GITHUB_WORKSPACE/external/SchemaEntity"
+            git clone --depth 1 --no-checkout https://github.com/pisex/SchemaEntity.git "$schema_root"
+            git -C "$schema_root" fetch --depth 1 origin "$SCHEMAENTITY_REF"
+            git -C "$schema_root" checkout --detach "$SCHEMAENTITY_REF"
+            echo "fallback-used=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "fallback-used=false" >> "$GITHUB_OUTPUT"
+          fi
+          schema_root="$GITHUB_WORKSPACE/external/SchemaEntity"
+          python3 -m pip install "$GITHUB_WORKSPACE/ambuild"
+          if [[ "$BUILD_ROOT" == "$MODULE_DIR" ]]; then
+            schema_link="$GITHUB_WORKSPACE/SchemaEntity"
+          else
+            schema_link="$GITHUB_WORKSPACE/$MODULE_DIR/SchemaEntity"
+          fi
+          rm -rf "$schema_link"
+          ln -s "$schema_root" "$schema_link"
+          rm -rf "$MANIFEST_PATH"
+          mkdir -p "$MANIFEST_PATH"
+          cp -R "$GITHUB_WORKSPACE/external/metamod-source/hl2sdk-manifests/." "$MANIFEST_PATH/"
+          test "$(git -C "$GITHUB_WORKSPACE/ambuild" rev-parse HEAD)" = "$AMBUILD_REF"
+          test "$(git -C "$GITHUB_WORKSPACE/external/metamod-source" rev-parse HEAD)" = "$MMS_REF"
+          test "$(git -C "$GITHUB_WORKSPACE/external/metamod-source/hl2sdk-manifests" rev-parse HEAD)" = "$MANIFEST_REF"
+          test "$(git -C "$GITHUB_WORKSPACE/external/hl2sdk-cs2" rev-parse HEAD)" = "$HL2SDK_REF"
+          test "$(git -C "$schema_root" rev-parse HEAD)" = "$SCHEMAENTITY_REF"
+          echo "pinned_dependencies_seconds=$(( $(date +%s) - start_time ))" >> "$GITHUB_STEP_SUMMARY"
+      - name: Write dependency cache summary
+        if: always()
+        env:
+          CACHE_RESTORE_STARTED_AT: ${{ steps.cache-restore-start.outputs.started_at }}
+          CACHE_RESTORE_FINISHED_AT: ${{ steps.cache-restore-finish.outputs.finished_at }}
+          SDK_CACHE_PRIMARY_KEY: ${{ steps.restore-dependencies.outputs.cache-primary-key }}
+          SDK_CACHE_MATCHED_KEY: ${{ steps.restore-dependencies.outputs.cache-matched-key }}
+          DEPENDENCY_CACHE_HIT: ${{ steps.restore-dependencies.outputs.cache-hit }}
+          DEPENDENCY_RESTORE_OUTCOME: ${{ steps.restore-dependencies.outcome }}
+          PIP_CACHE_PRIMARY_KEY: ${{ steps.restore-pip.outputs.cache-primary-key }}
+          PIP_CACHE_MATCHED_KEY: ${{ steps.restore-pip.outputs.cache-matched-key }}
+          PIP_CACHE_HIT: ${{ steps.restore-pip.outputs.cache-hit }}
+          PIP_RESTORE_OUTCOME: ${{ steps.restore-pip.outcome }}
+          FALLBACK_USED: ${{ steps.checkout-pinned-dependencies.outputs.fallback-used }}
+        run: |
+          cache_match_type() {
+            case "${1:-}" in
+              true) echo "exact" ;;
+              false) echo "partial" ;;
+              *) echo "miss" ;;
+            esac
+          }
+
+          restore_seconds="unavailable"
+          if [[ "${CACHE_RESTORE_STARTED_AT:-}" =~ ^[0-9]+$ && "${CACHE_RESTORE_FINISHED_AT:-}" =~ ^[0-9]+$ ]]; then
+            restore_seconds="$((CACHE_RESTORE_FINISHED_AT - CACHE_RESTORE_STARTED_AT))"
+          fi
+
+          {
+            echo "### Dependency cache"
+            echo "- SDK cache key: \`${{ env.CACHE_VERSION }}-${{ runner.os }}-ubuntu24.04-${{ env.AMBUILD_REF }}-${{ env.MMS_REF }}-${{ env.HL2SDK_REF }}-${{ env.SCHEMAENTITY_REF }}-${{ env.MANIFEST_REF }}\`"
+            echo "- SDK requested key: \`${SDK_CACHE_PRIMARY_KEY:-unavailable}\`"
+            echo "- SDK matched key: \`${SDK_CACHE_MATCHED_KEY:-none}\`"
+            echo "- SDK restore: \`$(cache_match_type \"$DEPENDENCY_CACHE_HIT\")\` (outcome: \`${DEPENDENCY_RESTORE_OUTCOME:-unknown}\`)"
+            echo "- pip cache key: \`pip-${{ env.CACHE_VERSION }}-ubuntu24.04-py312-${{ hashFiles('.github/workflows/build.yml') }}\`"
+            echo "- pip requested key: \`${PIP_CACHE_PRIMARY_KEY:-unavailable}\`"
+            echo "- pip matched key: \`${PIP_CACHE_MATCHED_KEY:-none}\`"
+            echo "- pip restore: \`$(cache_match_type \"$PIP_CACHE_HIT\")\` (outcome: \`${PIP_RESTORE_OUTCOME:-unknown}\`)"
+            echo "- Restore window (SDK + pip): \`${restore_seconds}s\`"
+            echo "- Fallback clone used: \`${FALLBACK_USED:-unknown}\`"
+            echo "- Pinned refs: AMBuild=\`$AMBUILD_REF\`, MMS=\`$MMS_REF\`, HL2SDK=\`$HL2SDK_REF\`, SchemaEntity=\`$SCHEMAENTITY_REF\`, manifest=\`$MANIFEST_REF\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prepare compatibility patches
+        run: |
+          schema_root="$GITHUB_WORKSPACE/external/SchemaEntity"
+          sed -i '/#include "schemasystem.h"/a #include "gametrace.h"' "$schema_root/globaltypes.h"
+          sed -i 's/NetworkStateChanged_t/NetworkStateChangedData/g' "$schema_root/schemasystem.cpp"
+          sed -i 's/FL_PAWN_FAKECLIENT/FL_BOT/g; s/FL_CONTROLLER_FAKECLIENT/FL_FAKECLIENT/g' "$schema_root/CCSPlayerPawn.h" "$schema_root/CCSPlayerController.h"
+          python3 - "$schema_root/ctimer.h" <<'PY'
+          import sys
+          from pathlib import Path
+          timer_path = Path(sys.argv[1])
+          content = timer_path.read_text()
+          needle = "class CTimerBase {\npublic:\n"
+          if "virtual ~CTimerBase()" in content:
+              raise SystemExit("CTimerBase destructor patch is already present")
+          if needle not in content:
+              raise SystemExit("Expected CTimerBase declaration was not found")
+          timer_path.write_text(content.replace(needle, needle + "    virtual ~CTimerBase() = default;\n", 1))
+          PY
+          grep -q '#include "gametrace.h"' "$schema_root/globaltypes.h"
+          ! grep -q 'NetworkStateChanged_t' "$schema_root/schemasystem.cpp"
+          ! grep -q 'FL_PAWN_FAKECLIENT\|FL_CONTROLLER_FAKECLIENT' "$schema_root/CCSPlayerPawn.h" "$schema_root/CCSPlayerController.h"
+      - name: Prepare and validate SDK manifest
+        run: |
+          proto_path="$GITHUB_WORKSPACE/external/hl2sdk-cs2/common/network_connection.proto"
+          if ! grep -q '^syntax = ' "$proto_path"; then
+            sed -i '1i syntax = "proto2";' "$proto_path"
+          fi
+          grep -q '^syntax = "proto2";$' "$proto_path"
+          python3 - "$MANIFEST_PATH/manifests/cs2.json" "$GITHUB_WORKSPACE/external/hl2sdk-cs2" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          manifest_path = Path(sys.argv[1])
+          sdk_root = Path(sys.argv[2])
+          manifest = json.loads(manifest_path.read_text())
+          manifest["include_paths"] = [path for path in manifest["include_paths"] if (sdk_root / path).is_dir()]
+          manifest_path.write_text(json.dumps(manifest, indent=4) + "\n")
+          PY
+          test -f "$MANIFEST_PATH/SdkHelpers.ambuild"
+          test -f "$MANIFEST_PATH/manifests/cs2.json"
+          test -f "$GITHUB_WORKSPACE/external/hl2sdk-cs2/public/tier1/generichash.h"
+          test ! -f "$GITHUB_WORKSPACE/external/hl2sdk-cs2/tier1/generichash.cpp"
+          sed -i "/tier1', 'generichash.cpp/d" "$GITHUB_WORKSPACE/$BUILD_ROOT/AMBuildScript"
+          ! grep -q "tier1', 'generichash.cpp" "$GITHUB_WORKSPACE/$BUILD_ROOT/AMBuildScript"
+      - name: Configure and build
+        env:
+          CC: clang-18
+          CXX: clang++-18
+        run: |
+          start_time=$(date +%s)
+          rm -rf "$GITHUB_WORKSPACE/$BUILD_ROOT/build"
+          mkdir -p "$GITHUB_WORKSPACE/$BUILD_ROOT/build"
+          cd "$GITHUB_WORKSPACE/$BUILD_ROOT/build"
+          python3 ../configure.py --sdks cs2 --targets x86_64 --enable-optimize --hl2sdk-manifests="$MANIFEST_PATH" --mms_path="$GITHUB_WORKSPACE/external/metamod-source" --hl2sdk-root="$GITHUB_WORKSPACE/external"
+          ambuild
+          echo "configure_build_seconds=$(( $(date +%s) - start_time ))" >> "$GITHUB_STEP_SUMMARY"
+      - name: Validate package and create archive
+        run: |
+          package_root="$GITHUB_WORKSPACE/$BUILD_ROOT/build/package"
+          python3 "$GITHUB_WORKSPACE/.github/scripts/validate_package.py" \
+            --manifest "$GITHUB_WORKSPACE/.github/package-manifest.json" \
+            --package-root "$package_root" \
+            --package-key "${{ matrix.module }}"
+          archive="$GITHUB_WORKSPACE/${{ matrix.module }}.tar.gz"
+          tar -czf "$archive" -C "$package_root" addons
+          python3 "$GITHUB_WORKSPACE/.github/scripts/validate_package.py" \
+            --manifest "$GITHUB_WORKSPACE/.github/package-manifest.json" \
+            --package-key "${{ matrix.module }}" \
+            --archive "$archive" \
+            --archive-format tar.gz
+          python3 "$GITHUB_WORKSPACE/.github/scripts/check_binary_smoke.py" \
+            --manifest "$GITHUB_WORKSPACE/.github/package-manifest.json" \
+            --package-key "${{ matrix.module }}" \
+            --package-root "$package_root"
+          test -s "$archive"
+
+      - name: Upload module archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          path: ${{ matrix.module }}.tar.gz
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+  package-release:
+    name: Package release artifacts
+    needs: [discover, build-module]
+    if: ${{ needs.discover.result == 'success' && needs.build-module.result == 'success' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update -qy
+          sudo apt-get install -y tar zip unzip
+
+      - name: Download module archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: VIP_*.tar.gz
+          path: module-archives
+          merge-multiple: true
+
+      - name: Verify downloaded module archives
+        env:
+          EXPECTED_MODULE_COUNT: ${{ needs.discover.outputs.module_count }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = json.loads(Path(".github/package-manifest.json").read_text(encoding="utf-8"))
+          expected = {f"{module}.tar.gz" for module in manifest["packages"]}
+          archive_dir = Path("module-archives")
+          actual = {path.name for path in archive_dir.glob("VIP_*.tar.gz")}
+          old_names = list(archive_dir.glob("vip-module-*"))
+          if actual != expected:
+              raise SystemExit(f"Unexpected module archives: missing={sorted(expected - actual)}, extra={sorted(actual)}")
+          if old_names:
+              raise SystemExit(f"Old artifact names found: {[path.name for path in old_names]}")
+          if len(actual) != int(os.environ["EXPECTED_MODULE_COUNT"]):
+              raise SystemExit(
+                  f"Expected {os.environ['EXPECTED_MODULE_COUNT']} module archives, found {len(actual)}"
+              )
+          PY
+
+      - name: Build combined archive
+        run: |
+          rm -rf combined-root release info
+          mkdir -p combined-root release info
+          cp module-archives/VIP_*.tar.gz release/
+          for archive in module-archives/VIP_*.tar.gz; do
+            tar -xzf "$archive" -C combined-root
+          done
+          test -d combined-root/addons
+          tar -czf release/VIP_Modules.tar.gz -C combined-root addons
+
+      - name: Validate combined archive
+        env:
+          EXPECTED_PACKAGE_FILE_COUNT: ${{ needs.discover.outputs.package_file_count }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import tarfile
+          from pathlib import Path
+
+          manifest = json.loads(Path(".github/package-manifest.json").read_text(encoding="utf-8"))
+          expected = {
+              path
+              for package in manifest["packages"].values()
+              for path in package["files"]
+          }
+          if len(expected) != int(os.environ["EXPECTED_PACKAGE_FILE_COUNT"]):
+              raise SystemExit(
+                  f"Expected {os.environ['EXPECTED_PACKAGE_FILE_COUNT']} unique manifest files, found {len(expected)}"
+              )
+
+          with tarfile.open("release/VIP_Modules.tar.gz", "r:gz") as archive:
+              actual = {member.name for member in archive.getmembers() if member.isfile()}
+
+          if actual != expected:
+              raise SystemExit(
+                  "Combined archive mismatch; "
+                  f"missing={sorted(expected - actual)}, extra={sorted(actual)}"
+              )
+          if any(name.endswith(".tar.gz") for name in actual):
+              raise SystemExit("Combined archive contains nested module archives")
+          print(f"Validated {len(actual)} package files in combined archive")
+          PY
+
+      - name: Create build reports
+        env:
+          MODULES_JSON: ${{ needs.discover.outputs.modules }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          entries = json.loads(os.environ["MODULES_JSON"])
+          commit = os.environ["COMMIT_SHA"]
+          manifest = json.loads(Path(".github/package-manifest.json").read_text(encoding="utf-8"))
+          modules = {entry["module"] for entry in entries}
+          if modules != set(manifest["packages"]):
+              raise SystemExit("Discovery output does not match package manifest")
+          info = Path("info")
+          for entry in sorted(entries, key=lambda item: item["module"]):
+              module = entry["module"]
+              report = info / f"{module}-BUILD_REPORT.md"
+              report.write_text(
+                  f"module={module}\n"
+                  f"build_root={entry['build_root']}\n"
+                  f"commit={commit}\n"
+                  "arch=x86_64\n",
+                  encoding="utf-8",
+              )
+          PY
+
+      - name: Create checksums and metadata archive
+        env:
+          EXPECTED_RELEASE_ARCHIVE_COUNT: ${{ needs.discover.outputs.release_archive_count }}
+        run: |
+          tarball_count="$(find release -maxdepth 1 -type f -name '*.tar.gz' | wc -l)"
+          test "$tarball_count" -eq "$EXPECTED_RELEASE_ARCHIVE_COUNT"
+          (
+            cd release
+            for archive in $(printf "%s\n" *.tar.gz | sort); do
+              sha256sum "$archive"
+            done
+          ) > info/SHA256SUMS
+          test "$(wc -l < info/SHA256SUMS)" -eq "$EXPECTED_RELEASE_ARCHIVE_COUNT"
+          (
+            cd info
+            zip -q -j "$GITHUB_WORKSPACE/release/Modules_Build_Info.zip" SHA256SUMS *.md
+          )
+
+      - name: Validate metadata archive
+        env:
+          EXPECTED_RELEASE_ARCHIVE_COUNT: ${{ needs.discover.outputs.release_archive_count }}
+          EXPECTED_REPORT_COUNT: ${{ needs.discover.outputs.report_count }}
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import os
+          import zipfile
+          from pathlib import Path
+
+          release = Path("release")
+          info = Path("info")
+          expected_archives = sorted(path.name for path in release.glob("*.tar.gz"))
+          expected_reports = {f"{path.name.removesuffix('.tar.gz')}-BUILD_REPORT.md" for path in release.glob("VIP_*.tar.gz") if path.name != "VIP_Modules.tar.gz"}
+          expected = {"SHA256SUMS"} | expected_reports
+          if len(expected_archives) != int(os.environ["EXPECTED_RELEASE_ARCHIVE_COUNT"]):
+              raise SystemExit(
+                  f"Expected {os.environ['EXPECTED_RELEASE_ARCHIVE_COUNT']} release archives, found {len(expected_archives)}"
+              )
+          if len(expected_reports) != int(os.environ["EXPECTED_REPORT_COUNT"]):
+              raise SystemExit(
+                  f"Expected {os.environ['EXPECTED_REPORT_COUNT']} reports, found {len(expected_reports)}"
+              )
+
+          with zipfile.ZipFile(release / "Modules_Build_Info.zip") as archive:
+              names = archive.namelist()
+          if len(names) != len(expected) or set(names) != expected:
+              raise SystemExit(f"Unexpected metadata files: {sorted(names)}")
+
+          lines = (info / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
+          if len(lines) != len(expected_archives):
+              raise SystemExit(
+                  f"Expected {len(expected_archives)} checksum lines, found {len(lines)}"
+              )
+          checksums = {}
+          for line in lines:
+              digest, filename = line.split(maxsplit=1)
+              if filename in checksums:
+                  raise SystemExit(f"Duplicate checksum entry: {filename}")
+              checksums[filename] = digest
+              actual = hashlib.sha256((release / filename).read_bytes()).hexdigest()
+              if digest != actual:
+                  raise SystemExit(f"Checksum mismatch: {filename}")
+          if list(checksums) != expected_archives:
+              raise SystemExit("SHA256SUMS is not sorted or does not cover all archives")
+          print("Validated metadata archive and SHA256SUMS")
+          PY
+
+      - name: Upload combined module archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          path: release/VIP_Modules.tar.gz
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build information
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          path: release/Modules_Build_Info.zip
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+  build-summary:
+    needs: [discover, prepare-dependencies, build-module, package-release]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          DISCOVER_RESULT: ${{ needs.discover.result }}
+          PREPARE_RESULT: ${{ needs.prepare-dependencies.result }}
+          BUILD_RESULT: ${{ needs.build-module.result }}
+          PACKAGE_RESULT: ${{ needs.package-release.result }}
+        run: |
+          test "$DISCOVER_RESULT" = success
+          test "$PREPARE_RESULT" = success
+          test "$BUILD_RESULT" = success
+          test "$PACKAGE_RESULT" = success
+          echo "All module builds and packaging passed."
+  create-release:
+    name: Update GitHub release
+    needs: [discover, build-summary]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.discover.result == 'success' && needs.build-summary.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: release-1.0-bywinsty
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: 1.0-bywinsty
+      RELEASE_TITLE: 1.0-bywinsty
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Download release tarballs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: VIP_*.tar.gz
+          path: release-assets
+          merge-multiple: true
+
+      - name: Validate release inputs
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(Path(".github/package-manifest.json").read_text(encoding="utf-8"))
+          expected = {f"{module}.tar.gz" for module in manifest["packages"]}
+          expected.add("VIP_Modules.tar.gz")
+          actual = {path.name for path in Path("release-assets").glob("VIP_*.tar.gz")}
+          if actual != expected:
+              raise SystemExit(
+                  f"Unexpected release inputs: missing={sorted(expected - actual)}, extra={sorted(actual)}"
+              )
+          if len(actual) != 36:
+              raise SystemExit(f"Expected 36 tar.gz assets, found {len(actual)}")
+          if Path("release-assets/Modules_Build_Info.zip").exists():
+              raise SystemExit("Modules_Build_Info.zip must not be a release input")
+          print("Validated 35 module archives and VIP_Modules.tar.gz")
+          PY
+
+      - name: Check current main tip
+        id: main-tip
+        run: |
+          current_tip="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$current_tip" != "$GITHUB_SHA" ]]; then
+            echo "Skipping stale run: main tip is $current_tip, workflow SHA is $GITHUB_SHA"
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "stale=false" >> "$GITHUB_OUTPUT"
+
+      - name: Move release tag
+        if: steps.main-tip.outputs.stale != 'true'
+        run: |
+          tag_ref="repos/$GITHUB_REPOSITORY/git/refs/tags/$RELEASE_TAG"
+          if gh api "$tag_ref" >/dev/null 2>&1; then
+            gh api --method PATCH "$tag_ref" -f sha="$GITHUB_SHA" -F force=true >/dev/null
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs"               -f ref="refs/tags/$RELEASE_TAG"               -f sha="$GITHUB_SHA" >/dev/null
+          fi
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')" = "$GITHUB_SHA"
+
+      - name: Create or update release
+        if: steps.main-tip.outputs.stale != 'true'
+        run: |
+          notes=$'Automated release from main.\n\nCommit: '"$GITHUB_SHA"$'\nWorkflow run: https://github.com/'"$GITHUB_REPOSITORY"'/actions/runs/'"$GITHUB_RUN_ID"
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG"               --repo "$GITHUB_REPOSITORY"               --title "$RELEASE_TITLE"               --notes "$notes"               --target "$GITHUB_SHA"
+          else
+            gh release create "$RELEASE_TAG"               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "$RELEASE_TITLE"               --notes "$notes"
+          fi
+
+      - name: Remove forbidden metadata asset
+        if: steps.main-tip.outputs.stale != 'true'
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fxq 'Modules_Build_Info.zip'; then
+            gh release delete-asset "$RELEASE_TAG" Modules_Build_Info.zip               --repo "$GITHUB_REPOSITORY"               --yes
+          fi
+
+      - name: Upload release assets
+        if: steps.main-tip.outputs.stale != 'true'
+        run: |
+          for asset in release-assets/*.tar.gz; do
+            gh release upload "$RELEASE_TAG" "$asset"               --repo "$GITHUB_REPOSITORY"               --clobber
+          done
+
+      - name: Verify release assets
+        if: steps.main-tip.outputs.stale != 'true'
+        run: |
+          mapfile -t expected < <(find release-assets -maxdepth 1 -type f -name '*.tar.gz' -printf '%f\n' | sort)
+          mapfile -t actual < <(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort)
+          if [[ "${expected[*]}" != "${actual[*]}" ]]; then
+            echo "Expected release assets:"
+            printf '%s\n' "${expected[@]}"
+            echo "Actual release assets:"
+            printf '%s\n' "${actual[@]}"
+            exit 1
+          fi
+          if printf '%s\n' "${actual[@]}" | grep -Fxq 'Modules_Build_Info.zip'; then
+            echo "Modules_Build_Info.zip must not be published"
+            exit 1
+          fi
+          test "${#actual[@]}" -eq 36
+          echo "Release contains exactly 36 tar.gz assets."
+

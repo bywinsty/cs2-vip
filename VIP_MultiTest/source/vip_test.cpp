@@ -26,10 +26,10 @@ bool OnVIPTestCommand(int iSlot, const char* szContent)
 {
 	// if(!g_pVIPCore->VIP_IsClientVIP(iSlot))
 	// {
-	// 	const char* szValue = g_pVIPCore->VIP_GetClientCookie(iSlot, "vip_test");
+	// 	const char* szValue = g_pVIPCore->VIP_GetClientCookie(iSlot, "vip_multitest");
 	// 	if(!strlen(szValue) || ((std::stoi(szValue) < std::time(0)) && iTimeout != 0))
 	// 	{
-	// 		g_pVIPCore->VIP_SetClientCookie(iSlot, "vip_test", std::to_string(std::time(0)+iTime+iTimeout).c_str());
+	// 		g_pVIPCore->VIP_SetClientCookie(iSlot, "vip_multitest", std::to_string(std::time(0)+iTime+iTimeout).c_str());
 	// 		g_pVIPCore->VIP_GiveClientVIP(iSlot, iTime, szGroup);
 	// 	}
 	// 	else
@@ -42,7 +42,7 @@ bool OnVIPTestCommand(int iSlot, const char* szContent)
 	// }
 	// else g_pUtils->PrintToChat(iSlot, g_pVIPCore->VIP_GetTranslate("AlreadyVIP"));
 	Menu hMenu;
-	g_pMenus->SetTitleMenu(hMenu, g_pVIPCore->VIP_GetTranslate("VIPTest_Title"));
+	g_pMenus->SetTitleMenu(hMenu, g_pVIPCore->VIP_GetTranslate("VIPMultiTest_Title"));
 	for(auto& it : g_VIPData)
 	{
 		g_pMenus->AddItemMenu(hMenu, it.second.szGroup, it.second.szDisplay);
@@ -56,19 +56,19 @@ bool OnVIPTestCommand(int iSlot, const char* szContent)
 				VIPData Group = g_VIPData[szBack];
 				const char* szValue;
 				if(g_iType == 1) {
-					szValue = g_pVIPCore->VIP_GetClientCookie(iSlot, "vip_test");
+					szValue = g_pVIPCore->VIP_GetClientCookie(iSlot, "vip_multitest");
 				} else {
 					char szBuffer[128];
-					g_SMAPI->Format(szBuffer, sizeof(szBuffer), "vip_test_%s", Group.szGroup);
+					g_SMAPI->Format(szBuffer, sizeof(szBuffer), "vip_multitest_%s", Group.szGroup);
 					szValue = g_pVIPCore->VIP_GetClientCookie(iSlot, szBuffer);
 				}
 
 				if(!strlen(szValue) || ((std::stoi(szValue) < std::time(0)) && Group.iTimeout != 0)) {
 					if(g_iType == 1) {
-						g_pVIPCore->VIP_SetClientCookie(iSlot, "vip_test", std::to_string(std::time(0)+Group.iTime+Group.iTimeout).c_str());
+						g_pVIPCore->VIP_SetClientCookie(iSlot, "vip_multitest", std::to_string(std::time(0)+Group.iTime+Group.iTimeout).c_str());
 					} else {
 						char szBuffer[128];
-						g_SMAPI->Format(szBuffer, sizeof(szBuffer), "vip_test_%s", Group.szGroup);
+						g_SMAPI->Format(szBuffer, sizeof(szBuffer), "vip_multitest_%s", Group.szGroup);
 						g_pVIPCore->VIP_SetClientCookie(iSlot, szBuffer, std::to_string(std::time(0)+Group.iTime+Group.iTimeout).c_str());
 					}
 					g_pUtils->NextFrame([iSlot, Group]() {g_pVIPCore->VIP_GiveClientVIP(iSlot, Group.iTime, Group.szGroup);});
@@ -105,7 +105,7 @@ bool vip_test::Unload(char *error, size_t maxlen)
 void LoadConfig()
 {
 	KeyValues* hKv = new KeyValues("VIP");
-	const char *pszPath = "addons/configs/vip/vip_test.ini";
+	const char *pszPath = "addons/configs/vip/vip_multitest.ini";
 
 	if (!hKv->LoadFromFile(g_pFullFileSystem, pszPath))
 	{
@@ -163,7 +163,7 @@ void vip_test::AllPluginsLoaded()
 	}
 
 	LoadConfig();
-	g_pUtils->RegCommand(g_PLID, {"mm_testvip", "sm_testvip", "mm_viptest", "sm_viptest"}, {"!testvip", "testvip", "!viptest", "viptest"}, OnVIPTestCommand);
+	g_pUtils->RegCommand(g_PLID, {"mm_vipmultitest", "sm_vipmultitest"}, {"!vipmultitest", "vipmultitest"}, OnVIPTestCommand);
 }
 
 const char *vip_test::GetLicense()
@@ -183,7 +183,7 @@ const char *vip_test::GetDate()
 
 const char *vip_test::GetLogTag()
 {
-	return "[VIP-TEST]";
+	return "[VIP-MULTITEST]";
 }
 
 const char *vip_test::GetAuthor()

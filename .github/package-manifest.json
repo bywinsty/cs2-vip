@@ -1,0 +1,292 @@
+{
+  "version": 1,
+  "packages": {
+    "VIP_AntiFlash": {
+      "files": [
+        "addons/vip_modules/vip_af.so",
+        "addons/metamod/vip_af.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_af.so",
+      "vdf": "addons/metamod/vip_af.vdf"
+    },
+    "VIP_AwpManager": {
+      "files": [
+        "addons/vip_modules/vip_awp_manager.so",
+        "addons/metamod/vip_awp_manager.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_awp_manager.so",
+      "vdf": "addons/metamod/vip_awp_manager.vdf"
+    },
+    "VIP_BaseFunctions": {
+      "files": [
+        "addons/vip_modules/vip_bf.so",
+        "addons/metamod/vip_bf.vdf",
+        "addons/configs/vip/vip_bf.ini"
+      ],
+      "binary": "addons/vip_modules/vip_bf.so",
+      "vdf": "addons/metamod/vip_bf.vdf"
+    },
+    "VIP_Bhop": {
+      "files": [
+        "addons/vip_modules/vip_bhop.so",
+        "addons/metamod/vip_bhop.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_bhop.so",
+      "vdf": "addons/metamod/vip_bhop.vdf"
+    },
+    "VIP_BuyTeamWeapon": {
+      "files": [
+        "addons/vip_modules/vip_btw.so",
+        "addons/metamod/vip_btw.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_btw.so",
+      "vdf": "addons/metamod/vip_btw.vdf"
+    },
+    "VIP_DuckSpeed": {
+      "files": [
+        "addons/vip_modules/vip_duckspeed.so",
+        "addons/metamod/vip_duckspeed.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_duckspeed.so",
+      "vdf": "addons/metamod/vip_duckspeed.vdf"
+    },
+    "VIP_Endurance": {
+      "files": [
+        "addons/vip_modules/vip_endurance.so",
+        "addons/metamod/vip_endurance.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_endurance.so",
+      "vdf": "addons/metamod/vip_endurance.vdf"
+    },
+    "VIP_FOV": {
+      "files": [
+        "addons/vip_modules/vip_fov.so",
+        "addons/metamod/vip_fov.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_fov.so",
+      "vdf": "addons/metamod/vip_fov.vdf"
+    },
+    "VIP_FastDefuse": {
+      "files": [
+        "addons/vip_modules/vip_fd.so",
+        "addons/metamod/vip_fd.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_fd.so",
+      "vdf": "addons/metamod/vip_fd.vdf"
+    },
+    "VIP_FastPlant": {
+      "files": [
+        "addons/vip_modules/vip_fp.so",
+        "addons/metamod/vip_fp.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_fp.so",
+      "vdf": "addons/metamod/vip_fp.vdf"
+    },
+    "VIP_Fortnite_Hits": {
+      "files": [
+        "addons/vip_modules/fh_vip.so",
+        "addons/metamod/fh_vip.vdf"
+      ],
+      "binary": "addons/vip_modules/fh_vip.so",
+      "vdf": "addons/metamod/fh_vip.vdf"
+    },
+    "VIP_Gravity": {
+      "files": [
+        "addons/vip_modules/vip_gravity.so",
+        "addons/metamod/vip_gravity.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_gravity.so",
+      "vdf": "addons/metamod/vip_gravity.vdf"
+    },
+    "VIP_Healthshot": {
+      "files": [
+        "addons/vip_modules/vip_healthshot.so",
+        "addons/metamod/vip_healthshot.vdf",
+        "addons/configs/vip/vip_healthshot.ini"
+      ],
+      "binary": "addons/vip_modules/vip_healthshot.so",
+      "vdf": "addons/metamod/vip_healthshot.vdf"
+    },
+    "VIP_Items": {
+      "files": [
+        "addons/vip_modules/vip_items.so",
+        "addons/metamod/vip_items.vdf",
+        "addons/configs/vip/vip_items.ini"
+      ],
+      "binary": "addons/vip_modules/vip_items.so",
+      "vdf": "addons/metamod/vip_items.vdf"
+    },
+    "VIP_JoinSound": {
+      "files": [
+        "addons/vip_modules/vip_joinsound.so",
+        "addons/metamod/vip_joinsound.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_joinsound.so",
+      "vdf": "addons/metamod/vip_joinsound.vdf"
+    },
+    "VIP_Jumps": {
+      "files": [
+        "addons/vip_modules/vip_jumps.so",
+        "addons/metamod/vip_jumps.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_jumps.so",
+      "vdf": "addons/metamod/vip_jumps.vdf"
+    },
+    "VIP_KillScreen": {
+      "files": [
+        "addons/vip_modules/vip_ks.so",
+        "addons/metamod/vip_ks.vdf",
+        "addons/configs/vip/vip_ks.ini"
+      ],
+      "binary": "addons/vip_modules/vip_ks.so",
+      "vdf": "addons/metamod/vip_ks.vdf"
+    },
+    "VIP_MultiTest": {
+      "files": [
+        "addons/vip_modules/vip_multitest.so",
+        "addons/metamod/vip_multitest.vdf",
+        "addons/configs/vip/vip_multitest.ini"
+      ],
+      "binary": "addons/vip_modules/vip_multitest.so",
+      "vdf": "addons/metamod/vip_multitest.vdf"
+    },
+    "VIP_NoFallDamage": {
+      "files": [
+        "addons/vip_modules/vip_nofalldamage.so",
+        "addons/metamod/vip_nofalldamage.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_nofalldamage.so",
+      "vdf": "addons/metamod/vip_nofalldamage.vdf"
+    },
+    "VIP_Penis": {
+      "files": [
+        "addons/vip_modules/vip_penis.so",
+        "addons/metamod/vip_penis.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_penis.so",
+      "vdf": "addons/metamod/vip_penis.vdf"
+    },
+    "VIP_RainbowModel": {
+      "files": [
+        "addons/vip_modules/vip_rm.so",
+        "addons/metamod/vip_rm.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_rm.so",
+      "vdf": "addons/metamod/vip_rm.vdf"
+    },
+    "VIP_RegenArmor": {
+      "files": [
+        "addons/vip_modules/vip_regen_armor.so",
+        "addons/metamod/vip_regen_armor.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_regen_armor.so",
+      "vdf": "addons/metamod/vip_regen_armor.vdf"
+    },
+    "VIP_RegenHP": {
+      "files": [
+        "addons/vip_modules/vip_regen_hp.so",
+        "addons/metamod/vip_regen_hp.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_regen_hp.so",
+      "vdf": "addons/metamod/vip_regen_hp.vdf"
+    },
+    "VIP_ResetDeaths": {
+      "files": [
+        "addons/vip_modules/vip_reset_deaths.so",
+        "addons/metamod/vip_reset_deaths.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_reset_deaths.so",
+      "vdf": "addons/metamod/vip_reset_deaths.vdf"
+    },
+    "VIP_Respawn": {
+      "files": [
+        "addons/vip_modules/vip_respawn.so",
+        "addons/metamod/vip_respawn.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_respawn.so",
+      "vdf": "addons/metamod/vip_respawn.vdf"
+    },
+    "VIP_ShowDamage": {
+      "files": [
+        "addons/vip_modules/vip_sd.so",
+        "addons/metamod/vip_sd.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_sd.so",
+      "vdf": "addons/metamod/vip_sd.vdf"
+    },
+    "VIP_Skins": {
+      "files": [
+        "addons/vip_modules/vip_skins.so",
+        "addons/metamod/vip_skins.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_skins.so",
+      "vdf": "addons/metamod/vip_skins.vdf"
+    },
+    "VIP_Smoke": {
+      "files": [
+        "addons/vip_modules/vip_smoke.so",
+        "addons/metamod/vip_smoke.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_smoke.so",
+      "vdf": "addons/metamod/vip_smoke.vdf"
+    },
+    "VIP_Speed": {
+      "files": [
+        "addons/vip_modules/vip_speed.so",
+        "addons/metamod/vip_speed.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_speed.so",
+      "vdf": "addons/metamod/vip_speed.vdf"
+    },
+    "VIP_Tag": {
+      "files": [
+        "addons/vip_modules/vip_tag.so",
+        "addons/metamod/vip_tag.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_tag.so",
+      "vdf": "addons/metamod/vip_tag.vdf"
+    },
+    "VIP_TeammatesHeal": {
+      "files": [
+        "addons/vip_modules/vip_teammates_heal.so",
+        "addons/metamod/vip_teammates_heal.vdf",
+        "addons/configs/vip/teammates_heal.ini"
+      ],
+      "binary": "addons/vip_modules/vip_teammates_heal.so",
+      "vdf": "addons/metamod/vip_teammates_heal.vdf"
+    },
+    "VIP_Test": {
+      "files": [
+        "addons/vip_modules/vip_test.so",
+        "addons/metamod/vip_test.vdf",
+        "addons/configs/vip/vip_test.ini"
+      ],
+      "binary": "addons/vip_modules/vip_test.so",
+      "vdf": "addons/metamod/vip_test.vdf"
+    },
+    "VIP_Time": {
+      "files": [
+        "addons/vip_modules/vip_time.so",
+        "addons/metamod/vip_time.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_time.so",
+      "vdf": "addons/metamod/vip_time.vdf"
+    },
+    "VIP_Vampirism": {
+      "files": [
+        "addons/vip_modules/vip_vampirism.so",
+        "addons/metamod/vip_vampirism.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_vampirism.so",
+      "vdf": "addons/metamod/vip_vampirism.vdf"
+    },
+    "VIP_Vips": {
+      "files": [
+        "addons/vip_modules/vip_vips.so",
+        "addons/metamod/vip_vips.vdf"
+      ],
+      "binary": "addons/vip_modules/vip_vips.so",
+      "vdf": "addons/metamod/vip_vips.vdf"
+    }
+  }
+}

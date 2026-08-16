@@ -2,6 +2,13 @@
 import os
 
 builder.SetBuildFolder('package')
+# Packaging is intentionally limited to one Linux 64-bit target.
+target_arches = {cxx.target.arch for cxx in MMSPlugin.all_targets}
+if len(MMSPlugin.all_targets) != 1 or target_arches != {'x86_64'}:
+  raise RuntimeError('PackageScript requires exactly one x86_64 target')
+if len(MMSPlugin.binaries) != 1 or MMSPlugin.binaries[0].target.arch != 'x86_64':
+  raise RuntimeError('PackageScript requires exactly one x86_64 binary')
+
 
 metamod_folder = builder.AddFolder(os.path.join('addons', 'metamod'))
 bin_folder_path = os.path.join('addons', "vip_modules")

@@ -95,7 +95,7 @@ bool OnTakeDamage(int iVictimSlot, CTakeDamageInfo* pInfo)
     if (pInfo->m_bitsDamageType & DMG_FALL)
         return true;
 
-    CCSPlayerPawn* pAttackerPawn = (CCSPlayerPawn*)pInfo->m_hAttacker.Get();
+    CCSPlayerPawn* pAttackerPawn = (CCSPlayerPawn*)pInfo->m_hAttacker().Get();
     if (!pAttackerPawn)
         return true;
 
