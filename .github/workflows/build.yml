@@ -18,7 +18,7 @@ env:
   HL2SDK_REF: 80cf8554d716a3841fe0680013cae3411a056a8d
   SCHEMAENTITY_REF: e7965b3c83ec684d44584ee6457c5482ee5d9db1
   MANIFEST_REF: 20b3a014264b38908c4a5d4eb263ba2c488f3dc1
-  CACHE_VERSION: v1
+  CACHE_VERSION: v2
 
 jobs:
   discover:
@@ -105,16 +105,16 @@ jobs:
             external/metamod-source
             external/hl2sdk-cs2
             external/SchemaEntity
-          key: ${{ env.CACHE_VERSION }}-${{ runner.os }}-ubuntu24.04-${{ env.AMBUILD_REF }}-${{ env.MMS_REF }}-${{ env.HL2SDK_REF }}-${{ env.SCHEMAENTITY_REF }}-${{ env.MANIFEST_REF }}
+          key: ${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-ubuntu24.04-${{ env.AMBUILD_REF }}-${{ env.MMS_REF }}-${{ env.HL2SDK_REF }}-${{ env.SCHEMAENTITY_REF }}-${{ env.MANIFEST_REF }}
       - name: Restore pip cache
         id: restore-pip
         continue-on-error: true
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.cache/pip
-          key: pip-${{ env.CACHE_VERSION }}-ubuntu24.04-py312-${{ hashFiles('.github/workflows/build.yml') }}
+          key: pip-${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-ubuntu24.04-py312-${{ hashFiles('.github/ci-requirements.txt') }}
           restore-keys: |
-            pip-${{ env.CACHE_VERSION }}-ubuntu24.04-py312-
+            pip-${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-ubuntu24.04-py312-
       - name: Finish dependency cache timer
         id: cache-restore-finish
         if: always()
@@ -124,8 +124,7 @@ jobs:
           start_time=$(date +%s)
           sudo apt-get update -qy
           sudo apt-get install -y binutils clang-18 file git libmaxminddb-dev python3 python3-pip unzip zip
-          python3 -m pip install --upgrade pip importlib-metadata
-          python3 -m pip install setuptools==45.2.0
+          python3 -m pip install --upgrade -r "$GITHUB_WORKSPACE/.github/ci-requirements.txt"
           echo "install_dependencies_seconds=$(( $(date +%s) - start_time ))" >> "$GITHUB_STEP_SUMMARY"
       - name: Prepare pristine pinned dependencies
         id: prepare
@@ -174,7 +173,7 @@ jobs:
             external/metamod-source
             external/hl2sdk-cs2
             external/SchemaEntity
-          key: ${{ env.CACHE_VERSION }}-${{ runner.os }}-ubuntu24.04-${{ env.AMBUILD_REF }}-${{ env.MMS_REF }}-${{ env.HL2SDK_REF }}-${{ env.SCHEMAENTITY_REF }}-${{ env.MANIFEST_REF }}
+          key: ${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-ubuntu24.04-${{ env.AMBUILD_REF }}-${{ env.MMS_REF }}-${{ env.HL2SDK_REF }}-${{ env.SCHEMAENTITY_REF }}-${{ env.MANIFEST_REF }}
       - name: Install pinned AMBuild
         if: steps.restore-dependencies.outputs.cache-hit == 'true' || steps.prepare.outcome == 'success'
         run: python3 -m pip install "$GITHUB_WORKSPACE/ambuild"
@@ -185,7 +184,7 @@ jobs:
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.cache/pip
-          key: pip-${{ env.CACHE_VERSION }}-ubuntu24.04-py312-${{ hashFiles('.github/workflows/build.yml') }}
+          key: pip-${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-ubuntu24.04-py312-${{ hashFiles('.github/ci-requirements.txt') }}
       - name: Write dependency cache summary
         if: always()
         env:
@@ -219,12 +218,12 @@ jobs:
           {
             echo "### Dependency cache"
             echo "- Event: \`$EVENT_NAME\`"
-            echo "- SDK cache key: \`${{ env.CACHE_VERSION }}-${{ runner.os }}-ubuntu24.04-${{ env.AMBUILD_REF }}-${{ env.MMS_REF }}-${{ env.HL2SDK_REF }}-${{ env.SCHEMAENTITY_REF }}-${{ env.MANIFEST_REF }}\`"
+            echo "- SDK cache key: \`${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-ubuntu24.04-${{ env.AMBUILD_REF }}-${{ env.MMS_REF }}-${{ env.HL2SDK_REF }}-${{ env.SCHEMAENTITY_REF }}-${{ env.MANIFEST_REF }}\`"
             echo "- SDK requested key: \`${SDK_CACHE_PRIMARY_KEY:-unavailable}\`"
             echo "- SDK matched key: \`${SDK_CACHE_MATCHED_KEY:-none}\`"
             echo "- SDK restore: \`$(cache_match_type \"$DEPENDENCY_CACHE_HIT\")\` (outcome: \`${DEPENDENCY_RESTORE_OUTCOME:-unknown}\`)"
             echo "- SDK save: \`${DEPENDENCY_SAVE_OUTCOME:-skipped}\`"
-            echo "- pip cache key: \`pip-${{ env.CACHE_VERSION }}-ubuntu24.04-py312-${{ hashFiles('.github/workflows/build.yml') }}\`"
+            echo "- pip cache key: \`pip-${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-ubuntu24.04-py312-${{ hashFiles('.github/ci-requirements.txt') }}\`"
             echo "- pip requested key: \`${PIP_CACHE_PRIMARY_KEY:-unavailable}\`"
             echo "- pip matched key: \`${PIP_CACHE_MATCHED_KEY:-none}\`"
             echo "- pip restore: \`$(cache_match_type \"$PIP_CACHE_HIT\")\` (outcome: \`${PIP_RESTORE_OUTCOME:-unknown}\`)"
@@ -233,6 +232,36 @@ jobs:
             echo "- Cache writes from pull requests: disabled"
             echo "- Pinned refs: AMBuild=\`$AMBUILD_REF\`, MMS=\`$MMS_REF\`, HL2SDK=\`$HL2SDK_REF\`, SchemaEntity=\`$SCHEMAENTITY_REF\`, manifest=\`$MANIFEST_REF\`"
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Write dependency cache telemetry
+        if: always()
+        env:
+          METRICS_JOB: prepare-dependencies
+          SDK_CACHE_PRIMARY_KEY: ${{ steps.restore-dependencies.outputs.cache-primary-key }}
+          SDK_CACHE_MATCHED_KEY: ${{ steps.restore-dependencies.outputs.cache-matched-key }}
+          DEPENDENCY_CACHE_HIT: ${{ steps.restore-dependencies.outputs.cache-hit }}
+          DEPENDENCY_RESTORE_OUTCOME: ${{ steps.restore-dependencies.outcome }}
+          SDK_CACHE_SAVE_OUTCOME: ${{ steps.save-dependencies.outcome }}
+          PIP_CACHE_PRIMARY_KEY: ${{ steps.restore-pip.outputs.cache-primary-key }}
+          PIP_CACHE_MATCHED_KEY: ${{ steps.restore-pip.outputs.cache-matched-key }}
+          PIP_CACHE_HIT: ${{ steps.restore-pip.outputs.cache-hit }}
+          PIP_RESTORE_OUTCOME: ${{ steps.restore-pip.outcome }}
+          PIP_CACHE_SAVE_OUTCOME: ${{ steps.save-pip.outcome }}
+          CACHE_RESTORE_STARTED_AT: ${{ steps.cache-restore-start.outputs.started_at }}
+          CACHE_RESTORE_FINISHED_AT: ${{ steps.cache-restore-finish.outputs.finished_at }}
+        run: |
+          python3 .github/scripts/cache_metrics.py record \
+            --job "$METRICS_JOB" \
+            --output "cache-metrics/${METRICS_JOB}.json"
+      - name: Upload dependency cache telemetry
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cache-metrics-prepare-dependencies
+          path: cache-metrics/prepare-dependencies.json
+          archive: true
+          if-no-files-found: warn
+          retention-days: 14
 
   build-module:
     needs: [discover, prepare-dependencies]
@@ -263,16 +292,16 @@ jobs:
             external/metamod-source
             external/hl2sdk-cs2
             external/SchemaEntity
-          key: ${{ env.CACHE_VERSION }}-${{ runner.os }}-ubuntu24.04-${{ env.AMBUILD_REF }}-${{ env.MMS_REF }}-${{ env.HL2SDK_REF }}-${{ env.SCHEMAENTITY_REF }}-${{ env.MANIFEST_REF }}
+          key: ${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-ubuntu24.04-${{ env.AMBUILD_REF }}-${{ env.MMS_REF }}-${{ env.HL2SDK_REF }}-${{ env.SCHEMAENTITY_REF }}-${{ env.MANIFEST_REF }}
       - name: Restore pip cache
         id: restore-pip
         continue-on-error: true
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.cache/pip
-          key: pip-${{ env.CACHE_VERSION }}-ubuntu24.04-py312-${{ hashFiles('.github/workflows/build.yml') }}
+          key: pip-${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-ubuntu24.04-py312-${{ hashFiles('.github/ci-requirements.txt') }}
           restore-keys: |
-            pip-${{ env.CACHE_VERSION }}-ubuntu24.04-py312-
+            pip-${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-ubuntu24.04-py312-
       - name: Finish dependency cache timer
         id: cache-restore-finish
         if: always()
@@ -281,8 +310,7 @@ jobs:
         run: |
           sudo apt-get update -qy
           sudo apt-get install -y binutils clang-18 file git libmaxminddb-dev python3 python3-pip unzip zip
-          python3 -m pip install --upgrade pip importlib-metadata
-          python3 -m pip install setuptools==45.2.0
+          python3 -m pip install --upgrade -r "$GITHUB_WORKSPACE/.github/ci-requirements.txt"
       - name: Restore or checkout pinned dependencies
         id: checkout-pinned-dependencies
         env:
@@ -358,11 +386,11 @@ jobs:
 
           {
             echo "### Dependency cache"
-            echo "- SDK cache key: \`${{ env.CACHE_VERSION }}-${{ runner.os }}-ubuntu24.04-${{ env.AMBUILD_REF }}-${{ env.MMS_REF }}-${{ env.HL2SDK_REF }}-${{ env.SCHEMAENTITY_REF }}-${{ env.MANIFEST_REF }}\`"
+            echo "- SDK cache key: \`${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-ubuntu24.04-${{ env.AMBUILD_REF }}-${{ env.MMS_REF }}-${{ env.HL2SDK_REF }}-${{ env.SCHEMAENTITY_REF }}-${{ env.MANIFEST_REF }}\`"
             echo "- SDK requested key: \`${SDK_CACHE_PRIMARY_KEY:-unavailable}\`"
             echo "- SDK matched key: \`${SDK_CACHE_MATCHED_KEY:-none}\`"
             echo "- SDK restore: \`$(cache_match_type \"$DEPENDENCY_CACHE_HIT\")\` (outcome: \`${DEPENDENCY_RESTORE_OUTCOME:-unknown}\`)"
-            echo "- pip cache key: \`pip-${{ env.CACHE_VERSION }}-ubuntu24.04-py312-${{ hashFiles('.github/workflows/build.yml') }}\`"
+            echo "- pip cache key: \`pip-${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-ubuntu24.04-py312-${{ hashFiles('.github/ci-requirements.txt') }}\`"
             echo "- pip requested key: \`${PIP_CACHE_PRIMARY_KEY:-unavailable}\`"
             echo "- pip matched key: \`${PIP_CACHE_MATCHED_KEY:-none}\`"
             echo "- pip restore: \`$(cache_match_type \"$PIP_CACHE_HIT\")\` (outcome: \`${PIP_RESTORE_OUTCOME:-unknown}\`)"
@@ -370,6 +398,35 @@ jobs:
             echo "- Fallback clone used: \`${FALLBACK_USED:-unknown}\`"
             echo "- Pinned refs: AMBuild=\`$AMBUILD_REF\`, MMS=\`$MMS_REF\`, HL2SDK=\`$HL2SDK_REF\`, SchemaEntity=\`$SCHEMAENTITY_REF\`, manifest=\`$MANIFEST_REF\`"
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Write dependency cache telemetry
+        if: always()
+        env:
+          METRICS_JOB: ${{ matrix.module }}
+          SDK_CACHE_PRIMARY_KEY: ${{ steps.restore-dependencies.outputs.cache-primary-key }}
+          SDK_CACHE_MATCHED_KEY: ${{ steps.restore-dependencies.outputs.cache-matched-key }}
+          DEPENDENCY_CACHE_HIT: ${{ steps.restore-dependencies.outputs.cache-hit }}
+          DEPENDENCY_RESTORE_OUTCOME: ${{ steps.restore-dependencies.outcome }}
+          PIP_CACHE_PRIMARY_KEY: ${{ steps.restore-pip.outputs.cache-primary-key }}
+          PIP_CACHE_MATCHED_KEY: ${{ steps.restore-pip.outputs.cache-matched-key }}
+          PIP_CACHE_HIT: ${{ steps.restore-pip.outputs.cache-hit }}
+          PIP_RESTORE_OUTCOME: ${{ steps.restore-pip.outcome }}
+          FALLBACK_USED: ${{ steps.checkout-pinned-dependencies.outputs.fallback-used }}
+          CACHE_RESTORE_STARTED_AT: ${{ steps.cache-restore-start.outputs.started_at }}
+          CACHE_RESTORE_FINISHED_AT: ${{ steps.cache-restore-finish.outputs.finished_at }}
+        run: |
+          python3 .github/scripts/cache_metrics.py record \
+            --job "$METRICS_JOB" \
+            --output "cache-metrics/${METRICS_JOB}.json"
+      - name: Upload module cache telemetry
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cache-metrics-${{ matrix.module }}
+          path: cache-metrics/${{ matrix.module }}.json
+          archive: true
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Prepare compatibility patches
         run: |
@@ -661,7 +718,42 @@ jobs:
     if: always()
     runs-on: ubuntu-24.04
     steps:
-      - env:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Download cache telemetry
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: cache-metrics-*
+          path: cache-metrics
+          merge-multiple: true
+
+      - name: Aggregate cache telemetry
+        if: always()
+        continue-on-error: true
+        env:
+          EXPECTED_MODULES_JSON: ${{ needs.discover.outputs.modules }}
+        run: |
+          python3 .github/scripts/cache_metrics.py aggregate \
+            --input-dir cache-metrics \
+            --output-json cache-metrics-summary.json \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload aggregate cache telemetry
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cache-metrics-summary
+          path: cache-metrics-summary.json
+          archive: true
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Verify build results
+        env:
           DISCOVER_RESULT: ${{ needs.discover.result }}
           PREPARE_RESULT: ${{ needs.prepare-dependencies.result }}
           BUILD_RESULT: ${{ needs.build-module.result }}
@@ -782,4 +874,3 @@ jobs:
           fi
           test "${#actual[@]}" -eq 36
           echo "Release contains exactly 36 tar.gz assets."
-

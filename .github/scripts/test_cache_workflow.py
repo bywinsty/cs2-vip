@@ -10,24 +10,26 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "build.yml"
+REQUIREMENTS = ROOT / ".github" / "ci-requirements.txt"
 
 SDK_REFS = ("AMBUILD_REF", "MMS_REF", "HL2SDK_REF", "SCHEMAENTITY_REF", "MANIFEST_REF")
 
 
-def sdk_cache_key(refs: dict[str, str], version: str = "v1") -> str:
+def sdk_cache_key(refs: dict[str, str], runner_arch: str = "X64", version: str = "v2") -> str:
     return "-".join(
         [
             version,
             "Linux",
+            runner_arch,
             "ubuntu24.04",
             *(refs[name] for name in SDK_REFS),
         ]
     )
 
 
-def pip_cache_key(workflow: str, version: str = "v1") -> str:
-    workflow_hash = hashlib.sha256(workflow.encode("utf-8")).hexdigest()
-    return f"pip-{version}-ubuntu24.04-py312-{workflow_hash}"
+def pip_cache_key(requirements: str, runner_arch: str = "X64", version: str = "v2") -> str:
+    requirements_hash = hashlib.sha256(requirements.encode("utf-8")).hexdigest()
+    return f"pip-{version}-Linux-{runner_arch}-ubuntu24.04-py312-{requirements_hash}"
 
 
 def cache_match_type(value: str | None) -> str:
@@ -48,6 +50,10 @@ class CacheWorkflowTests(unittest.TestCase):
         self.assertEqual(self.workflow.count("uses: actions/cache/save@"), 2)
         self.assertNotIn("uses: actions/cache@", self.workflow)
 
+    def test_cache_version_and_runner_arch_are_part_of_cache_keys(self):
+        self.assertIn("CACHE_VERSION: v2", self.workflow)
+        self.assertGreaterEqual(self.workflow.count("${{ runner.arch }}"), 8)
+
     def test_sdk_key_contains_all_pinned_dependency_refs(self):
         key_lines = [
             line for line in self.workflow.splitlines() if line.strip().startswith("key:")
@@ -59,16 +65,24 @@ class CacheWorkflowTests(unittest.TestCase):
 
     def test_sdk_key_changes_when_any_pinned_ref_changes(self):
         refs = {name: name.lower() for name in SDK_REFS}
-        original = sdk_cache_key(refs)
+        original = sdk_cache_key(refs, runner_arch="X64")
         changed = dict(refs)
         changed["HL2SDK_REF"] = "changed-ref"
-        self.assertNotEqual(original, sdk_cache_key(changed))
+        self.assertNotEqual(original, sdk_cache_key(changed, runner_arch="X64"))
 
-    def test_pip_key_changes_when_workflow_content_changes(self):
-        original = pip_cache_key(self.workflow)
-        changed = pip_cache_key(self.workflow + "\n# cache contract change\n")
+    def test_pip_key_changes_when_requirements_change(self):
+        requirements = REQUIREMENTS.read_text(encoding="utf-8")
+        original = pip_cache_key(requirements, runner_arch="X64")
+        changed = pip_cache_key(requirements + "\n# dependency bump\n", runner_arch="X64")
         self.assertNotEqual(original, changed)
-        self.assertIn("hashFiles('.github/workflows/build.yml')", self.workflow)
+        self.assertIn("hashFiles('.github/ci-requirements.txt')", self.workflow)
+        self.assertNotIn("hashFiles('.github/workflows/build.yml')", self.workflow)
+
+    def test_ci_requirements_are_pinned(self):
+        self.assertEqual(
+            REQUIREMENTS.read_text(encoding="utf-8").splitlines(),
+            ["pip==26.2.1", "importlib-metadata==9.0.0", "setuptools==45.2.0"],
+        )
 
     def test_restore_status_contract_distinguishes_exact_partial_and_miss(self):
         self.assertEqual(cache_match_type("true"), "exact")
@@ -114,6 +128,20 @@ class CacheWorkflowTests(unittest.TestCase):
         self.assertNotIn(r"\${FALLBACK_USED", self.workflow)
         self.assertIn("SDK matched key:", self.workflow)
         self.assertIn("pip matched key:", self.workflow)
+
+    def test_cache_telemetry_is_uploaded_per_job_and_aggregated(self):
+        self.assertIn("cache_metrics.py record", self.workflow)
+        self.assertIn("name: cache-metrics-${{ matrix.module }}", self.workflow)
+        self.assertIn("pattern: cache-metrics-*", self.workflow)
+        self.assertIn("cache_metrics.py aggregate", self.workflow)
+        self.assertIn("name: cache-metrics-summary", self.workflow)
+        telemetry_uploads = re.findall(
+            r"- name: (?:Upload dependency cache telemetry|Upload module cache telemetry|Upload aggregate cache telemetry)\n(.*?)(?=\n      - name:|\Z)",
+            self.workflow,
+            flags=re.DOTALL,
+        )
+        self.assertEqual(len(telemetry_uploads), 3)
+        self.assertTrue(all("archive: true" in block for block in telemetry_uploads))
 
 
 if __name__ == "__main__":
