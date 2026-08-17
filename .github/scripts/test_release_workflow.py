@@ -41,9 +41,9 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("RELEASE_TAG:", self.release_job)
         self.assertIn("RELEASE_TITLE:", self.release_job)
         self.assertIn("git/ref/heads/$GITHUB_REF_NAME", self.release_job)
-        self.assertIn("refs/tags/$RELEASE_TAG", self.release_job)
-        self.assertIn("force=true", self.release_job)
+        self.assertIn("update_release_tag.sh", self.release_job)
         self.assertIn('gh release delete "$RELEASE_TAG"', self.release_job)
+        self.assertNotIn('--target "$GITHUB_SHA"', self.release_job)
         self.assertNotIn("--cleanup-tag", self.release_job)
         self.assertIn("IS_PRERELEASE:", self.release_job)
         self.assertIn("dev-core", self.release_job)
@@ -60,6 +60,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("gh release upload", self.release_job)
         self.assertIn("Verify release assets", self.release_job)
         self.assertIn('test "$(gh release view "$RELEASE_TAG"', self.release_job)
+        self.assertIn("test_update_release_tag.py", self.workflow)
 
     def test_no_legacy_release_configuration(self):
         self.assertNotIn("1.0-bywinsty", self.workflow)

@@ -51,6 +51,9 @@ jobs:
       - name: Check release workflow contract
         run: python3 .github/scripts/test_release_workflow.py
 
+      - name: Test branch tag helper
+        run: python3 .github/scripts/test_update_release_tag.py
+
       - name: Prepare build tools
         id: prepare-build-tools
         uses: ./.github/actions/prepare-build-tools
@@ -84,7 +87,7 @@ jobs:
       - name: Prepare SchemaEntity dependency
         run: |
           set -euo pipefail
-          schema_root="$GITHUB_WORKSPACE/../SchemaEntity"
+          schema_root="$GITHUB_WORKSPACE/external/SchemaEntity"
           if [[ ! -d "$schema_root/.git" ]]; then
             git clone --depth 1 --no-checkout https://github.com/pisex/SchemaEntity.git "$schema_root"
           fi
@@ -98,9 +101,13 @@ jobs:
           test "$(git -C "$MMS_PATH" rev-parse HEAD)" = "$MMS_REF"
           test "$(git -C "$MMS_PATH/hl2sdk-manifests" rev-parse HEAD)" = "$MANIFEST_REF"
           test "$(git -C "$HL2SDK_ROOT/hl2sdk-cs2" rev-parse HEAD)" = "$HL2SDK_REF"
-          test "$(git -C "$GITHUB_WORKSPACE/../SchemaEntity" rev-parse HEAD)" = "$SCHEMAENTITY_REF"
+          test "$(git -C "$GITHUB_WORKSPACE/external/SchemaEntity" rev-parse HEAD)" = "$SCHEMAENTITY_REF"
+          rm -f "$GITHUB_WORKSPACE/../SchemaEntity"
+          ln -s "$GITHUB_WORKSPACE/external/SchemaEntity" "$GITHUB_WORKSPACE/../SchemaEntity"
+          test -e "$GITHUB_WORKSPACE/../SchemaEntity"
 
       - name: Save pristine dependency cache
+        id: save-dependencies
         if: github.event_name != 'pull_request' && steps.restore-dependencies.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
@@ -124,6 +131,7 @@ jobs:
           python .github/scripts/verify_python_toolchain.py --check-ambuild
 
       - name: Save pip cache
+        id: save-pip
         if: github.event_name != 'pull_request' && steps.restore-pip.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
@@ -188,6 +196,21 @@ jobs:
 
       - name: Write cache telemetry
         if: always()
+        env:
+          SDK_CACHE_PRIMARY_KEY: ${{ steps.restore-dependencies.outputs.cache-primary-key }}
+          SDK_CACHE_MATCHED_KEY: ${{ steps.restore-dependencies.outputs.cache-matched-key }}
+          DEPENDENCY_CACHE_HIT: ${{ steps.restore-dependencies.outputs.cache-hit }}
+          DEPENDENCY_RESTORE_OUTCOME: ${{ steps.restore-dependencies.outcome }}
+          SDK_CACHE_SAVE_OUTCOME: ${{ steps.save-dependencies.outcome }}
+          PIP_CACHE_PRIMARY_KEY: ${{ steps.restore-pip.outputs.cache-primary-key }}
+          PIP_CACHE_MATCHED_KEY: ${{ steps.restore-pip.outputs.cache-matched-key }}
+          PIP_CACHE_HIT: ${{ steps.restore-pip.outputs.cache-hit }}
+          PIP_RESTORE_OUTCOME: ${{ steps.restore-pip.outcome }}
+          PIP_CACHE_SAVE_OUTCOME: ${{ steps.save-pip.outcome }}
+          SYSTEM_SETUP_SECONDS: ${{ steps.prepare-build-tools.outputs.setup-seconds }}
+          APT_UPDATED: ${{ steps.prepare-build-tools.outputs.apt-updated }}
+          MISSING_APT_PACKAGES: ${{ steps.prepare-build-tools.outputs.missing-apt-packages }}
+          PYTHON_VERSION: ${{ steps.prepare-build-tools.outputs.python-version }}
         run: |
           python .github/scripts/cache_metrics.py record \
             --job build \
@@ -261,16 +284,7 @@ jobs:
 
       - name: Move release tag
         if: steps.branch-tip.outputs.stale != 'true'
-        run: |
-          tag_ref="repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG"
-          if gh api "$tag_ref" >/dev/null 2>&1; then
-            gh api --method PATCH "$tag_ref" -f sha="$GITHUB_SHA" -F force=true >/dev/null
-          else
-            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
-              -f ref="refs/tags/$RELEASE_TAG" \
-              -f sha="$GITHUB_SHA" >/dev/null
-          fi
-          test "$(gh api "$tag_ref" --jq '.object.sha')" = "$GITHUB_SHA"
+        run: bash .github/scripts/update_release_tag.sh
 
       - name: Delete existing release
         if: steps.branch-tip.outputs.stale != 'true'
@@ -288,14 +302,12 @@ jobs:
           if [[ "$IS_PRERELEASE" == "true" ]]; then
             gh release create "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" \
               --title "$RELEASE_TITLE" \
               --notes "$notes" \
               --prerelease
           else
             gh release create "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" \
               --title "$RELEASE_TITLE" \
               --notes "$notes"
           fi

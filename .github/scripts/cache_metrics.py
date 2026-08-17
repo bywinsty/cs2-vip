@@ -21,8 +21,10 @@ def main() -> int:
     keys = (
         "GITHUB_RUN_ID", "GITHUB_SHA", "GITHUB_REPOSITORY", "GITHUB_EVENT_NAME",
         "RUNNER_OS", "RUNNER_ARCH", "SDK_CACHE_PRIMARY_KEY", "SDK_CACHE_MATCHED_KEY",
-        "DEPENDENCY_CACHE_HIT", "SDK_CACHE_SAVE_OUTCOME", "PYTHON_VERSION",
-        "MISSING_APT_PACKAGES", "APT_UPDATED",
+        "DEPENDENCY_CACHE_HIT", "DEPENDENCY_RESTORE_OUTCOME", "SDK_CACHE_SAVE_OUTCOME",
+        "PIP_CACHE_PRIMARY_KEY", "PIP_CACHE_MATCHED_KEY", "PIP_CACHE_HIT",
+        "PIP_RESTORE_OUTCOME", "PIP_CACHE_SAVE_OUTCOME", "SYSTEM_SETUP_SECONDS",
+        "PYTHON_VERSION", "MISSING_APT_PACKAGES", "APT_UPDATED",
     )
     record = {"schema_version": 1, "job": args.job, **{key.lower(): os.getenv(key, "") for key in keys}}
     output = Path(args.output)

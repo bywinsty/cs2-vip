@@ -18,7 +18,11 @@ def main() -> int:
         failures.append("obsolete generichash.cpp source entry must be absent")
     if "PackageScript supports exactly one target" not in package:
         failures.append("PackageScript single-target guard is missing")
-    for required in ("clang-18", "--targets x86_64", "actions/cache/restore@", "actions/cache/save@"):
+    for required in (
+        "clang-18", "--targets x86_64", "actions/cache/restore@", "actions/cache/save@",
+        "external/SchemaEntity", "update_release_tag.sh", "SDK_CACHE_MATCHED_KEY",
+        "PIP_CACHE_MATCHED_KEY", "SYSTEM_SETUP_SECONDS", "prepare-build-tools.outputs.python-version",
+    ):
         if required not in workflow:
             failures.append(f"workflow requirement is missing: {required}")
     if failures:
