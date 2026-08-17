@@ -50,6 +50,8 @@ jobs:
         run: python3 .github/scripts/test_cache_workflow.py
       - name: Test release workflow contract
         run: python3 .github/scripts/test_release_workflow.py
+      - name: Test branch tag helper
+        run: python3 .github/scripts/test_update_release_tag.py
       - name: Test documentation links
         run: python3 .github/scripts/test_documentation_links.py
       - id: manifest_contract
@@ -822,6 +824,10 @@ jobs:
             --output-json cache-metrics-summary.json \
             --summary-file "$GITHUB_STEP_SUMMARY"
 
+      - name: Note legacy archive alias
+        run: |
+          echo '- `VIP_Modules.tar.gz` is a legacy compatibility alias and byte-for-byte duplicate of `VIP_All_Modules.tar.gz`.' >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload aggregate cache telemetry
         if: always()
         continue-on-error: true
@@ -912,14 +918,7 @@ jobs:
 
       - name: Move release tag
         if: steps.branch-tip.outputs.stale != 'true'
-        run: |
-          tag_ref="repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG"
-          if gh api "$tag_ref" >/dev/null 2>&1; then
-            gh api --method PATCH "$tag_ref" -f sha="$GITHUB_SHA" -F force=true >/dev/null
-          else
-            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$RELEASE_TAG" -f sha="$GITHUB_SHA" >/dev/null
-          fi
-          test "$(gh api "$tag_ref" --jq '.object.sha')" = "$GITHUB_SHA"
+        run: bash .github/scripts/update_release_tag.sh
 
       - name: Delete existing release
         if: steps.branch-tip.outputs.stale != 'true'
@@ -936,7 +935,6 @@ jobs:
           notes="Automated release from $RELEASE_TAG. Commit: $GITHUB_SHA. Workflow run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           gh release create "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
             --title "$RELEASE_TITLE" \
             --notes "$notes" \
             --draft
