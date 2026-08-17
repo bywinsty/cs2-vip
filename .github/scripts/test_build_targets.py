@@ -22,6 +22,10 @@ def main():
             failures.append(
                 f"{path.relative_to(ROOT)}: default target_archs is not {DEFAULT_TARGETS}"
             )
+        if "tier1', 'generichash.cpp" in text:
+            failures.append(
+                f"{path.relative_to(ROOT)}: obsolete HL2SDK generichash.cpp source entry"
+            )
 
     if len(scripts) != expected_module_count:
         failures.append(

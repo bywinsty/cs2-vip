@@ -11,8 +11,12 @@ def main():
     for raw in paths:
         if not raw:
             continue
-        path = Path(os.fsdecode(raw))
-        data = path.read_bytes()
+        name = os.fsdecode(raw)
+        path = Path(name)
+        try:
+            data = subprocess.check_output(["git", "show", f":{name}"])
+        except subprocess.CalledProcessError:
+            data = path.read_bytes()
         if b"\0" in data:
             continue
         if b"\r" in data:

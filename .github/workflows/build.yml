@@ -476,49 +476,17 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Prepare compatibility patches
+      - name: Apply and validate SDK compatibility patches
         run: |
-          schema_root="$GITHUB_WORKSPACE/external/SchemaEntity"
-          sed -i '/#include "schemasystem.h"/a #include "gametrace.h"' "$schema_root/globaltypes.h"
-          sed -i 's/NetworkStateChanged_t/NetworkStateChangedData/g' "$schema_root/schemasystem.cpp"
-          sed -i 's/FL_PAWN_FAKECLIENT/FL_BOT/g; s/FL_CONTROLLER_FAKECLIENT/FL_FAKECLIENT/g' "$schema_root/CCSPlayerPawn.h" "$schema_root/CCSPlayerController.h"
-          python - "$schema_root/ctimer.h" <<'PY'
-          import sys
-          from pathlib import Path
-          timer_path = Path(sys.argv[1])
-          content = timer_path.read_text()
-          needle = "class CTimerBase {\npublic:\n"
-          if "virtual ~CTimerBase()" in content:
-              raise SystemExit("CTimerBase destructor patch is already present")
-          if needle not in content:
-              raise SystemExit("Expected CTimerBase declaration was not found")
-          timer_path.write_text(content.replace(needle, needle + "    virtual ~CTimerBase() = default;\n", 1))
-          PY
-          grep -q '#include "gametrace.h"' "$schema_root/globaltypes.h"
-          ! grep -q 'NetworkStateChanged_t' "$schema_root/schemasystem.cpp"
-          ! grep -q 'FL_PAWN_FAKECLIENT\|FL_CONTROLLER_FAKECLIENT' "$schema_root/CCSPlayerPawn.h" "$schema_root/CCSPlayerController.h"
-      - name: Prepare and validate SDK manifest
-        run: |
-          proto_path="$GITHUB_WORKSPACE/external/hl2sdk-cs2/common/network_connection.proto"
-          if ! grep -q '^syntax = ' "$proto_path"; then
-            sed -i '1i syntax = "proto2";' "$proto_path"
-          fi
-          grep -q '^syntax = "proto2";$' "$proto_path"
-          python - "$MANIFEST_PATH/manifests/cs2.json" "$GITHUB_WORKSPACE/external/hl2sdk-cs2" <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-          manifest_path = Path(sys.argv[1])
-          sdk_root = Path(sys.argv[2])
-          manifest = json.loads(manifest_path.read_text())
-          manifest["include_paths"] = [path for path in manifest["include_paths"] if (sdk_root / path).is_dir()]
-          manifest_path.write_text(json.dumps(manifest, indent=4) + "\n")
-          PY
+          python "$GITHUB_WORKSPACE/.github/scripts/apply_sdk_compatibility_patches.py" \
+            --sdk-root "$GITHUB_WORKSPACE/external/hl2sdk-cs2" \
+            --proto-path "$GITHUB_WORKSPACE/external/hl2sdk-cs2/common/network_connection.proto" \
+            --manifest-path "$MANIFEST_PATH/manifests/cs2.json" \
+            --schema-root "$GITHUB_WORKSPACE/external/SchemaEntity"
           test -f "$MANIFEST_PATH/SdkHelpers.ambuild"
           test -f "$MANIFEST_PATH/manifests/cs2.json"
           test -f "$GITHUB_WORKSPACE/external/hl2sdk-cs2/public/tier1/generichash.h"
           test ! -f "$GITHUB_WORKSPACE/external/hl2sdk-cs2/tier1/generichash.cpp"
-          sed -i "/tier1', 'generichash.cpp/d" "$GITHUB_WORKSPACE/$BUILD_ROOT/AMBuildScript"
           ! grep -q "tier1', 'generichash.cpp" "$GITHUB_WORKSPACE/$BUILD_ROOT/AMBuildScript"
       - name: Configure and build
         env:
