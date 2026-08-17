@@ -2,13 +2,11 @@ name: Build VIP Modules
 on:
   push:
     branches:
-      - main
-      - PR
-      - dev
+      - Modules
+      - dev-modules
   pull_request:
     branches:
-      - main
-      - PR
+      - Modules
   workflow_dispatch:
 
 permissions:
@@ -848,19 +846,26 @@ jobs:
           test "$PACKAGE_RESULT" = success
           echo "All module builds and packaging passed."
   create-release:
-    name: Update GitHub release
+    name: Update ${{ github.ref_name }} release
     needs: [discover, build-summary]
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.discover.result == 'success' && needs.build-summary.result == 'success' }}
+    if: >-
+      ${{
+        github.event_name == 'push' &&
+        (github.ref_name == 'Modules' || github.ref_name == 'dev-modules') &&
+        needs.discover.result == 'success' &&
+        needs.build-summary.result == 'success'
+      }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     concurrency:
-      group: release-1.0-bywinsty
+      group: release-${{ github.ref_name }}
       cancel-in-progress: false
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_TAG: 1.0-bywinsty
-      RELEASE_TITLE: 1.0-bywinsty
+      RELEASE_TAG: ${{ github.ref_name }}
+      RELEASE_TITLE: ${{ github.ref_name }}
+      IS_PRERELEASE: ${{ github.ref_name == 'dev-modules' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -894,30 +899,30 @@ jobs:
           print("Validated 35 module archives and both combined archive names")
           PY
 
-      - name: Check current main tip
-        id: main-tip
+      - name: Check current branch tip
+        id: branch-tip
         run: |
-          current_tip="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          current_tip="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$GITHUB_REF_NAME" --jq '.object.sha')"
           if [[ "$current_tip" != "$GITHUB_SHA" ]]; then
-            echo "Skipping stale run: main tip is $current_tip, workflow SHA is $GITHUB_SHA"
+            echo "Skipping stale run: $GITHUB_REF_NAME tip is $current_tip, workflow SHA is $GITHUB_SHA"
             echo "stale=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "stale=false" >> "$GITHUB_OUTPUT"
 
       - name: Move release tag
-        if: steps.main-tip.outputs.stale != 'true'
+        if: steps.branch-tip.outputs.stale != 'true'
         run: |
-          tag_ref="repos/$GITHUB_REPOSITORY/git/refs/tags/$RELEASE_TAG"
+          tag_ref="repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG"
           if gh api "$tag_ref" >/dev/null 2>&1; then
             gh api --method PATCH "$tag_ref" -f sha="$GITHUB_SHA" -F force=true >/dev/null
           else
-            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs"               -f ref="refs/tags/$RELEASE_TAG"               -f sha="$GITHUB_SHA" >/dev/null
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$RELEASE_TAG" -f sha="$GITHUB_SHA" >/dev/null
           fi
-          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')" = "$GITHUB_SHA"
+          test "$(gh api "$tag_ref" --jq '.object.sha')" = "$GITHUB_SHA"
 
       - name: Delete existing release
-        if: steps.main-tip.outputs.stale != 'true'
+        if: steps.branch-tip.outputs.stale != 'true'
         run: |
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release delete "$RELEASE_TAG" \
@@ -926,9 +931,9 @@ jobs:
           fi
 
       - name: Create replacement draft release
-        if: steps.main-tip.outputs.stale != 'true'
+        if: steps.branch-tip.outputs.stale != 'true'
         run: |
-          notes=$'Automated release from main.\n\nCommit: '"$GITHUB_SHA"$'\nWorkflow run: https://github.com/'"$GITHUB_REPOSITORY"'/actions/runs/'"$GITHUB_RUN_ID"
+          notes="Automated release from $RELEASE_TAG. Commit: $GITHUB_SHA. Workflow run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           gh release create "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
@@ -937,14 +942,14 @@ jobs:
             --draft
 
       - name: Upload release assets
-        if: steps.main-tip.outputs.stale != 'true'
+        if: steps.branch-tip.outputs.stale != 'true'
         run: |
           for asset in release-assets/*.tar.gz; do
-            gh release upload "$RELEASE_TAG" "$asset"               --repo "$GITHUB_REPOSITORY"               --clobber
+            gh release upload "$RELEASE_TAG" "$asset" --repo "$GITHUB_REPOSITORY" --clobber
           done
 
       - name: Verify release assets
-        if: steps.main-tip.outputs.stale != 'true'
+        if: steps.branch-tip.outputs.stale != 'true'
         run: |
           mapfile -t expected < <(find release-assets -maxdepth 1 -type f -name '*.tar.gz' -printf '%f\n' | sort)
           mapfile -t actual < <(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort)
@@ -963,8 +968,10 @@ jobs:
           echo "Release contains exactly 37 tar.gz assets, including the legacy combined archive alias."
 
       - name: Publish replacement release
-        if: steps.main-tip.outputs.stale != 'true'
+        if: steps.branch-tip.outputs.stale != 'true'
         run: |
-          gh release edit "$RELEASE_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --draft=false
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
+          else
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          fi
