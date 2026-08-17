@@ -25,7 +25,7 @@ def _ensure_include(path: Path) -> None:
 def _replace_or_verify(path: Path, old: str, new: str, description: str) -> None:
     text = path.read_text(encoding="utf-8")
     if old in text:
-        _write(path, text.replace(old, new, 1))
+        _write(path, text.replace(old, new))
         return
     if new not in text:
         raise SystemExit(f"{description}: expected source pattern not found in {path}")
