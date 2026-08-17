@@ -1,0 +1,49 @@
+name: Prepare build tools
+description: Configure pinned Python and install missing Linux build tools.
+
+outputs:
+  python-version:
+    description: Resolved Python version.
+    value: ${{ steps.python-info.outputs.python-version }}
+  missing-apt-packages:
+    description: Packages missing before setup.
+    value: ${{ steps.package-audit.outputs.missing-apt-packages }}
+  apt-updated:
+    description: Whether apt-get update was required.
+    value: ${{ steps.package-audit.outputs.apt-updated }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+      with:
+        python-version: '3.12'
+        check-latest: false
+    - name: Install missing system packages
+      id: package-audit
+      shell: bash
+      run: |
+        set -euo pipefail
+        required_packages=(binutils clang-18 file git unzip zip)
+        missing_packages=()
+        for package in "${required_packages[@]}"; do
+          status="$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)"
+          if [[ "$status" != "install ok installed" ]]; then missing_packages+=("$package"); fi
+        done
+        apt_updated=false
+        if ((${#missing_packages[@]} > 0)); then
+          sudo apt-get update -qy
+          sudo apt-get install -y "${missing_packages[@]}"
+          apt_updated=true
+        fi
+        printf 'missing-apt-packages=%s\n' "${missing_packages[*]}" >> "$GITHUB_OUTPUT"
+        printf 'apt-updated=%s\n' "$apt_updated" >> "$GITHUB_OUTPUT"
+    - name: Verify Python and build tools
+      id: python-info
+      shell: bash
+      run: |
+        set -euo pipefail
+        python_version="$(python --version 2>&1 | awk '{print $2}')"
+        printf 'python-version=%s\n' "$python_version" >> "$GITHUB_OUTPUT"
+        for command in clang-18 clang++-18 git zip unzip file; do command -v "$command" >/dev/null; done

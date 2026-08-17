@@ -33,3 +33,10 @@ Console commands:
 - Database file: `addons/configs/databases.cfg`
 - Groups file: `addons/configs/vip/groups.ini`
 - Translation file: `addons/translations/vip.phrases.txt`
+
+## Account ID migration
+
+VIP persistence uses SteamID64. Existing SQL rows with the legacy 32-bit
+account key are read as a fallback and migrated on client authorization. The
+local KeyValues cookie backend performs the same migration, and numeric IDs
+passed to `vip_give` are normalized to SteamID64 before insertion.
