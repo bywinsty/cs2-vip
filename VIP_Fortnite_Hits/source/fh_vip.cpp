@@ -13,8 +13,9 @@ CEntitySystem* g_pEntitySystem = nullptr;
 
 IUtilsApi* g_pUtils;
 IPlayersApi* g_pPlayers;
-IFortniteHitsApi* g_pFortniteHits;
+IFortniteHitsApi001* g_pFortniteHits;
 IVIPApi* g_pVIPCore;
+bool g_bCallbacksRegistered = false;
 
 CGameEntitySystem* GameEntitySystem()
 {
@@ -43,23 +44,58 @@ bool fh_vip::Load(PluginId id, ISmmAPI* ismm, char* error, size_t maxlen, bool l
 
 bool fh_vip::Unload(char *error, size_t maxlen)
 {
+	if (g_bCallbacksRegistered)
+	{
+		g_SMAPI->Format(error, maxlen, "VIP callbacks cannot be detached by the current IVIPApi; restart the server to unload safely");
+		return false;
+	}
 	ConVar_Unregister();
+	if (g_pUtils)
+		g_pUtils->ClearAllHooks(g_PLID);
+	if (g_pFortniteHits)
+	{
+		for (int i = 0; i < 64; i++)
+			g_pFortniteHits->TakeClientAccess(i);
+	}
 	return true;
+}
+
+void SyncClientAccess(int iSlot, bool bIsVIP)
+{
+	if (iSlot < 0 || iSlot >= 64 || !g_pFortniteHits || !g_pVIPCore)
+		return;
+
+	if (bIsVIP && g_pVIPCore->VIP_GetClientFeatureBool(iSlot, "fortnite_hits"))
+		g_pFortniteHits->GiveClientAccess(iSlot);
+	else
+		g_pFortniteHits->TakeClientAccess(iSlot);
 }
 
 void OnClientAuthorized(int iSlot, bool bIsVIP)
 {
-	if(bIsVIP && g_pVIPCore->VIP_GetClientFeatureBool(iSlot, "fortnite_hits")) {
-		g_pFortniteHits->GiveClientAccess(iSlot);
-	}
+	SyncClientAccess(iSlot, bIsVIP);
+}
+
+void OnClientDisconnect(int iSlot, bool bIsVIP)
+{
+	if (g_pFortniteHits && iSlot >= 0 && iSlot < 64)
+		g_pFortniteHits->TakeClientAccess(iSlot);
+}
+
+void OnVIPClientAdded(int iSlot)
+{
+	SyncClientAccess(iSlot, g_pVIPCore && g_pVIPCore->VIP_IsClientVIP(iSlot));
+}
+
+void OnVIPClientRemoved(int iSlot, int iReason)
+{
+	if (g_pFortniteHits && iSlot >= 0 && iSlot < 64)
+		g_pFortniteHits->TakeClientAccess(iSlot);
 }
 
 bool OnToggle(int iSlot, const char* szFeature, VIP_ToggleState eOldStatus, VIP_ToggleState& eNewStatus)
 {
-	if (eNewStatus == ENABLED)
-		g_pFortniteHits->GiveClientAccess(iSlot);
-	else
-		g_pFortniteHits->TakeClientAccess(iSlot);
+	SyncClientAccess(iSlot, eNewStatus == ENABLED && g_pVIPCore && g_pVIPCore->VIP_IsClientVIP(iSlot));
 	return false;
 }
 
@@ -85,10 +121,17 @@ void fh_vip::AllPluginsLoaded()
 		engine->ServerCommand(sBuffer.c_str());
 		return;
 	}
-	g_pFortniteHits = (IFortniteHitsApi *)g_SMAPI->MetaFactory(FH_INTERFACE, &ret, NULL);
+	g_pFortniteHits = (IFortniteHitsApi001 *)g_SMAPI->MetaFactory(FH_INTERFACE_001, &ret, NULL);
 	if (ret == META_IFACE_FAILED)
 	{
-		g_pUtils->ErrorLog("[%s] Missing Fortnite Hits system plugin", GetLogTag());
+		g_pUtils->ErrorLog("[%s] Fortnite Hits API v1 (IFortniteHitsApi001) is required", GetLogTag());
+		std::string sBuffer = "meta unload "+std::to_string(g_PLID);
+		engine->ServerCommand(sBuffer.c_str());
+		return;
+	}
+	if (g_pFortniteHits->GetApiVersion() != 1 || g_pFortniteHits->GetAccessMode() != FH_ACCESS_VIP)
+	{
+		g_pUtils->ErrorLog("[%s] Fortnite Hits API version or access mode is incompatible", GetLogTag());
 		std::string sBuffer = "meta unload "+std::to_string(g_PLID);
 		engine->ServerCommand(sBuffer.c_str());
 		return;
@@ -102,7 +145,11 @@ void fh_vip::AllPluginsLoaded()
 		return;
 	}
 	g_pVIPCore->VIP_OnClientLoaded(OnClientAuthorized);
+	g_pVIPCore->VIP_OnClientDisconnect(OnClientDisconnect);
+	g_pVIPCore->VIP_OnVIPClientAdded(OnVIPClientAdded);
+	g_pVIPCore->VIP_OnVIPClientRemoved(OnVIPClientRemoved);
 	g_pVIPCore->VIP_RegisterFeature("fortnite_hits", VIP_BOOL, TOGGLABLE, nullptr, OnToggle);
+	g_bCallbacksRegistered = true;
 	g_pUtils->StartupServer(g_PLID, StartupServer);
 }
 
@@ -114,7 +161,7 @@ const char* fh_vip::GetLicense()
 
 const char* fh_vip::GetVersion()
 {
-	return "1.0.1";
+	return "1.1.0";
 }
 
 const char* fh_vip::GetDate()

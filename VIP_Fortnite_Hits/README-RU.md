@@ -2,9 +2,9 @@
 
 # [VIP] [Fortnite Hits](https://github.com/bywinsty/cs2-vip-modules/tree/main/VIP_Fortnite_Hits)
 
-## Связывает VIP-доступ с плагином Fortnite Hits. Этот модуль сам не отображает урон, а вызывает внешний `IFortniteHitsApi` для выдачи или отзыва доступа VIP-игрокам.
+## Связывает VIP-доступ с плагином Fortnite Hits. Этот модуль сам не отображает урон, а вызывает внешний `IFortniteHitsApi001` для выдачи или отзыва доступа VIP-игрокам.
 
-Перед этим модулем установите и загрузите плагин Fortnite Hits.
+Перед этим модулем установите и загрузите плагин Fortnite Hits. Настройте его с `access_mode "vip"`; standalone/free-режим предназначен для работы без этого модуля.
 
 ### Ключ возможности
 

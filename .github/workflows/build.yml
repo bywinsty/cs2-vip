@@ -40,6 +40,8 @@ jobs:
 
       - name: Test package validator
         run: python3 .github/scripts/test_validate_package.py
+      - name: Test Fortnite Hits API contract
+        run: python3 .github/scripts/test_fortnite_hits_contract.py
       - name: Test manifest contract
         run: python3 .github/scripts/test_manifest_contract.py
       - name: Test VIP_MultiTest upgrade preflight

@@ -2,9 +2,9 @@
 
 # [VIP] [Fortnite Hits](https://github.com/bywinsty/cs2-vip-modules/tree/main/VIP_Fortnite_Hits)
 
-## Connects VIP access to the Fortnite Hits plugin. This module does not render the damage display itself; it calls the external plugin's `IFortniteHitsApi` to grant or revoke access for VIP players.
+## Connects VIP access to the Fortnite Hits plugin. This module does not render the damage display itself; it calls the external plugin's `IFortniteHitsApi001` to grant or revoke access for VIP players.
 
-Install and load the Fortnite Hits plugin before this module.
+Install and load the Fortnite Hits plugin before this module. Configure it with `access_mode "vip"`; the standalone/free mode is intended for use without this module.
 
 ### Feature key
 
