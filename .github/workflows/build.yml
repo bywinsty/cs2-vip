@@ -25,6 +25,7 @@ env:
   HL2SDK_REF: "159cddd44cef4d9d607ef4ec4ac9f85cf056494c"
   SCHEMAENTITY_REF: "e7965b3c83ec684d44584ee6457c5482ee5d9db1"
   MANIFEST_REF: "20b3a014264b38908c4a5d4eb263ba2c488f3dc1"
+  CACHE_VERSION: "v2"
 
 jobs:
   build:
@@ -41,127 +42,119 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - name: Verify LF line endings
+        run: python .github/scripts/check_line_endings.py
+
+      - name: Check build contract
+        run: python .github/scripts/test_build_contract.py
+
       - name: Check SteamID64 persistence contract
-        run: python3 tests/test_steamid64.py
+        run: python tests/test_steamid64.py
 
-      - name: Set up dependencies
+      - name: Prepare build tools
+        id: prepare-build-tools
+        uses: ./.github/actions/prepare-build-tools
+
+      - name: Restore pinned dependency cache
+        id: restore-dependencies
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ambuild
+            external
+          key: ${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-ubuntu24.04-${{ env.AMBUILD_REF }}-${{ env.MMS_REF }}-${{ env.HL2SDK_REF }}-${{ env.SCHEMAENTITY_REF }}-${{ env.MANIFEST_REF }}
+
+      - name: Prepare pinned dependencies
+        if: steps.restore-dependencies.outputs.cache-hit != 'true'
         run: |
-          export DEBIAN_FRONTEND=noninteractive
-          sudo apt-get update -qy
-          sudo apt-get install -y git clang-18 binutils python3 python3-pip zip
-          python3 --version
-          python3 -m pip --version
-          clang-18 --version
-
-          python3 -m pip install --upgrade pip importlib-metadata
-          python3 -m pip install setuptools==45.2.0
+          set -euo pipefail
           git clone --depth 1 --no-checkout https://github.com/alliedmodders/ambuild.git "$GITHUB_WORKSPACE/ambuild"
           git -C "$GITHUB_WORKSPACE/ambuild" fetch --depth 1 origin "$AMBUILD_REF"
           git -C "$GITHUB_WORKSPACE/ambuild" checkout --detach "$AMBUILD_REF"
-          python3 -m pip install "$GITHUB_WORKSPACE/ambuild"
-
           mkdir -p "$GITHUB_WORKSPACE/external"
-          git clone --depth 1 --no-checkout \
-            https://github.com/alliedmodders/metamod-source.git "$GITHUB_WORKSPACE/external/metamod-source"
-          git -C "$GITHUB_WORKSPACE/external/metamod-source" fetch --depth 1 origin "$MMS_REF"
-          git -C "$GITHUB_WORKSPACE/external/metamod-source" checkout --detach "$MMS_REF"
-          git -C "$GITHUB_WORKSPACE/external/metamod-source" submodule update --init --recursive
+          git clone --depth 1 --no-checkout https://github.com/alliedmodders/metamod-source.git "$MMS_PATH"
+          git -C "$MMS_PATH" fetch --depth 1 origin "$MMS_REF"
+          git -C "$MMS_PATH" checkout --detach "$MMS_REF"
+          git -C "$MMS_PATH" submodule update --init --recursive
+          git clone --depth 1 --no-checkout https://github.com/alliedmodders/hl2sdk.git "$HL2SDK_ROOT/hl2sdk-cs2"
+          git -C "$HL2SDK_ROOT/hl2sdk-cs2" fetch --depth 1 origin "$HL2SDK_REF"
+          git -C "$HL2SDK_ROOT/hl2sdk-cs2" checkout --detach "$HL2SDK_REF"
+          git -C "$HL2SDK_ROOT/hl2sdk-cs2" submodule update --init --recursive
 
-          git clone --depth 1 --no-checkout \
-            https://github.com/alliedmodders/hl2sdk.git "$GITHUB_WORKSPACE/external/hl2sdk-cs2"
-          git -C "$GITHUB_WORKSPACE/external/hl2sdk-cs2" fetch --depth 1 origin "$HL2SDK_REF"
-          git -C "$GITHUB_WORKSPACE/external/hl2sdk-cs2" checkout --detach "$HL2SDK_REF"
-          git -C "$GITHUB_WORKSPACE/external/hl2sdk-cs2" submodule update --init --recursive
+      - name: Prepare SchemaEntity dependency
+        run: |
+          set -euo pipefail
+          schema_root="$GITHUB_WORKSPACE/../SchemaEntity"
+          if [[ ! -d "$schema_root/.git" ]]; then
+            git clone --depth 1 --no-checkout https://github.com/pisex/SchemaEntity.git "$schema_root"
+          fi
+          git -C "$schema_root" fetch --depth 1 origin "$SCHEMAENTITY_REF"
+          git -C "$schema_root" checkout --detach "$SCHEMAENTITY_REF"
 
-          git clone --depth 1 --no-checkout https://github.com/pisex/SchemaEntity.git \
-            "$GITHUB_WORKSPACE/../SchemaEntity"
-          git -C "$GITHUB_WORKSPACE/../SchemaEntity" fetch --depth 1 origin "$SCHEMAENTITY_REF"
-          git -C "$GITHUB_WORKSPACE/../SchemaEntity" checkout --detach "$SCHEMAENTITY_REF"
-
+      - name: Validate pinned dependency revisions
+        run: |
+          set -euo pipefail
           test "$(git -C "$GITHUB_WORKSPACE/ambuild" rev-parse HEAD)" = "$AMBUILD_REF"
           test "$(git -C "$MMS_PATH" rev-parse HEAD)" = "$MMS_REF"
           test "$(git -C "$MMS_PATH/hl2sdk-manifests" rev-parse HEAD)" = "$MANIFEST_REF"
           test "$(git -C "$HL2SDK_ROOT/hl2sdk-cs2" rev-parse HEAD)" = "$HL2SDK_REF"
           test "$(git -C "$GITHUB_WORKSPACE/../SchemaEntity" rev-parse HEAD)" = "$SCHEMAENTITY_REF"
 
-          # SdkHelpers.ambuild resolves manifests relative to builder.sourcePath.
-          # Keep the exact upstream manifest checkout at the repository path it reads.
+      - name: Save pristine dependency cache
+        if: github.event_name != 'pull_request' && steps.restore-dependencies.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ambuild
+            external
+          key: ${{ steps.restore-dependencies.outputs.cache-primary-key }}
+
+      - name: Restore pip cache
+        id: restore-pip
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-ubuntu24.04-py312-${{ hashFiles('.github/ci-requirements.txt') }}
+
+      - name: Install pinned Python dependencies
+        run: |
+          python -m pip install -r .github/ci-requirements.txt
+          python .github/scripts/verify_python_toolchain.py
+          python -m pip install "$GITHUB_WORKSPACE/ambuild"
+          python .github/scripts/verify_python_toolchain.py --check-ambuild
+
+      - name: Save pip cache
+        if: github.event_name != 'pull_request' && steps.restore-pip.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-ubuntu24.04-py312-${{ hashFiles('.github/ci-requirements.txt') }}
+
+      - name: Prepare and validate SDK compatibility patches
+        run: |
+          set -euo pipefail
           rm -rf "$GITHUB_WORKSPACE/hl2sdk-manifests"
           mkdir -p "$GITHUB_WORKSPACE/hl2sdk-manifests"
           cp -R "$MMS_PATH/hl2sdk-manifests/." "$GITHUB_WORKSPACE/hl2sdk-manifests/"
-
-          proto_path="$HL2SDK_ROOT/hl2sdk-cs2/common/network_connection.proto"
-          if ! grep -q '^syntax = ' "$proto_path"; then
-            sed -i '1i syntax = "proto2";' "$proto_path"
-          fi
-          grep -q '^syntax = "proto2";$' "$proto_path"
-
-          python3 - "$MANIFEST_PATH/manifests/cs2.json" "$HL2SDK_ROOT/hl2sdk-cs2" <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-
-          manifest_path = Path(sys.argv[1])
-          sdk_root = Path(sys.argv[2])
-          manifest = json.loads(manifest_path.read_text())
-          include_paths = manifest["include_paths"]
-          manifest["include_paths"] = [
-              path for path in include_paths if (sdk_root / path).is_dir()
-          ]
-          manifest_path.write_text(json.dumps(manifest, indent=4) + "\n")
-          PY
-
-          test ! -d "$HL2SDK_ROOT/hl2sdk-cs2/public/game/server" || \
-            grep -q '"public/game/server"' "$MANIFEST_PATH/manifests/cs2.json"
-
-          schema_root="$GITHUB_WORKSPACE/../SchemaEntity"
-          sed -i '/#include "schemasystem.h"/a #include "gametrace.h"' \
-            "$schema_root/globaltypes.h"
-          sed -i 's/NetworkStateChanged_t/NetworkStateChangedData/g' \
-            "$schema_root/schemasystem.cpp"
-          sed -i 's/FL_PAWN_FAKECLIENT/FL_BOT/g; s/FL_CONTROLLER_FAKECLIENT/FL_FAKECLIENT/g' \
-            "$schema_root/CCSPlayerPawn.h" "$schema_root/CCSPlayerController.h"
-
-          python3 - "$schema_root/ctimer.h" <<'PY'
-          import sys
-          from pathlib import Path
-
-          timer_path = Path(sys.argv[1])
-          content = timer_path.read_text()
-          if "virtual ~CTimerBase()" in content:
-              raise SystemExit("CTimerBase destructor patch is already present")
-          needle = "class CTimerBase {\npublic:\n"
-          replacement = needle + "    virtual ~CTimerBase() = default;\n"
-          if needle not in content:
-              raise SystemExit("Expected CTimerBase declaration was not found")
-          timer_path.write_text(content.replace(needle, replacement, 1))
-          PY
-
-
+          python .github/scripts/apply_sdk_compatibility_patches.py \
+            --sdk-root "$HL2SDK_ROOT/hl2sdk-cs2" \
+            --manifest-path "$MANIFEST_PATH/manifests/cs2.json" \
+            --schema-root "$GITHUB_WORKSPACE/../SchemaEntity" \
+            --require-include public/game/server
           test -f "$MANIFEST_PATH/SdkHelpers.ambuild"
           test -f "$MANIFEST_PATH/manifests/cs2.json"
-          test -f "$schema_root/schemasystem.cpp"
-          test -f "$schema_root/CCSPlayerPawn.h"
-          test -f "$schema_root/CCSPlayerController.h"
-          test -f "$HL2SDK_ROOT/hl2sdk-cs2/public/tier1/generichash.h"
-          test ! -f "$HL2SDK_ROOT/hl2sdk-cs2/tier1/generichash.cpp"
-          ! grep -q "tier1', 'generichash.cpp" "$GITHUB_WORKSPACE/AMBuildScript"
-          grep -q '#include "gametrace.h"' "$schema_root/globaltypes.h"
-          ! grep -q 'NetworkStateChanged_t' "$schema_root/schemasystem.cpp"
-          ! grep -q 'FL_PAWN_FAKECLIENT\|FL_CONTROLLER_FAKECLIENT' \
-            "$schema_root/CCSPlayerPawn.h" "$schema_root/CCSPlayerController.h"
-          grep -q 'FL_BOT' "$schema_root/CCSPlayerPawn.h"
-          grep -q 'FL_FAKECLIENT' "$schema_root/CCSPlayerController.h"
+          test -f "$GITHUB_WORKSPACE/../SchemaEntity/schemasystem.cpp"
 
       - name: Configure and build plugin
         env:
           CC: clang-18
           CXX: clang++-18
         run: |
+          set -euo pipefail
           rm -rf build
           mkdir build
           cd build
-          python3 ../configure.py \
+          python ../configure.py \
             --sdks cs2 \
             --targets x86_64 \
             --enable-optimize \
@@ -172,6 +165,7 @@ jobs:
 
       - name: Validate and create archive
         run: |
+          set -euo pipefail
           test -d build/package/addons
           expected_files="$(mktemp)"
           actual_files="$(mktemp)"
@@ -191,6 +185,22 @@ jobs:
           test -s "$GITHUB_WORKSPACE/vip.zip"
           zip -T "$GITHUB_WORKSPACE/vip.zip"
           sha256sum "$GITHUB_WORKSPACE/vip.zip"
+
+      - name: Write cache telemetry
+        if: always()
+        run: |
+          python .github/scripts/cache_metrics.py record \
+            --job build \
+            --output cache-metrics/build.json
+
+      - name: Upload cache telemetry
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cache-metrics-build
+          path: cache-metrics/build.json
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload archive to artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
