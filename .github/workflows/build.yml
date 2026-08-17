@@ -3,11 +3,11 @@ name: Build AMBuild Plugin
 on:
   push:
     branches:
-      - main
+      - Core
       - dev
   pull_request:
     branches:
-      - main
+      - Core
   release:
     types:
       - created
@@ -36,7 +36,7 @@ jobs:
     steps:
       - name: Configure Git defaults
         run: |
-          git config --global init.defaultBranch main
+          git config --global init.defaultBranch Core
           git config --global advice.defaultBranchName false
 
       - name: Checkout code
