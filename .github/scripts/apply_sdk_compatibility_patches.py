@@ -49,14 +49,15 @@ def patch_proto(path: Path) -> None:
         raise SystemExit(f"unsupported protobuf syntax in {path}: {syntax}")
 
 
-def patch_manifest(path: Path, sdk_root: Path) -> None:
+def patch_manifest(path: Path, sdk_root: Path, required_includes: list[str]) -> None:
     manifest = json.loads(path.read_text(encoding="utf-8"))
     include_paths = manifest.get("include_paths")
     if not isinstance(include_paths, list):
         raise SystemExit(f"manifest include_paths is not a list: {path}")
     filtered = [item for item in include_paths if isinstance(item, str) and (sdk_root / item).is_dir()]
-    if (sdk_root / "public" / "game" / "server").is_dir() and "public/game/server" not in filtered:
-        raise SystemExit("manifest lost required public/game/server include")
+    for required in required_includes:
+        if (sdk_root / required).is_dir() and required not in filtered:
+            raise SystemExit(f"manifest lost required include: {required}")
     if filtered != include_paths:
         manifest["include_paths"] = filtered
         write(path, json.dumps(manifest, indent=4) + "\n")
@@ -68,11 +69,12 @@ def main() -> int:
     parser.add_argument("--manifest-path", type=Path, required=True)
     parser.add_argument("--schema-root", type=Path, required=True)
     parser.add_argument("--proto-path", type=Path)
+    parser.add_argument("--require-include", action="append", default=[])
     args = parser.parse_args()
 
     sdk_root = args.sdk_root
     patch_proto(args.proto_path or sdk_root / "common" / "network_connection.proto")
-    patch_manifest(args.manifest_path, sdk_root)
+    patch_manifest(args.manifest_path, sdk_root, args.require_include or ["public/game/server"])
     schema = args.schema_root
     ensure_include(schema / "globaltypes.h")
     replace_or_verify(schema / "schemasystem.cpp", "NetworkStateChanged_t", "NetworkStateChangedData")
