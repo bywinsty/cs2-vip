@@ -37,10 +37,11 @@ def load_contract(path):
         "module_count": len(packages),
         "package_file_count": len(set(all_files)),
         "module_archive_count": len(module_archives),
-        "release_archive_count": len(module_archives) + 1,
+        "release_archive_count": len(module_archives) + 2,
         "report_count": len(packages),
         "module_archives": module_archives,
-        "combined_archive": "VIP_Modules.tar.gz",
+        "combined_archive": "VIP_All_Modules.tar.gz",
+        "legacy_combined_archive": "VIP_Modules.tar.gz",
     }
 
 
@@ -53,6 +54,7 @@ def write_github_outputs(contract, output_path):
             "release_archive_count",
             "report_count",
             "combined_archive",
+            "legacy_combined_archive",
         ):
             output.write(f"{key}={contract[key]}\n")
         output.write(

@@ -11,6 +11,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "build.yml"
 REQUIREMENTS = ROOT / ".github" / "ci-requirements.txt"
+PREPARE_BUILD_TOOLS = ROOT / ".github" / "actions" / "prepare-build-tools" / "action.yml"
+PYTHON_TOOLCHAIN = ROOT / ".github" / "scripts" / "verify_python_toolchain.py"
 
 SDK_REFS = ("AMBUILD_REF", "MMS_REF", "HL2SDK_REF", "SCHEMAENTITY_REF", "MANIFEST_REF")
 
@@ -44,6 +46,54 @@ class CacheWorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.workflow = WORKFLOW.read_text(encoding="utf-8")
+        cls.prepare_build_tools = PREPARE_BUILD_TOOLS.read_text(encoding="utf-8")
+        cls.python_toolchain = PYTHON_TOOLCHAIN.read_text(encoding="utf-8")
+
+    def test_prepare_build_tools_action_is_pinned_and_standardizes_python(self):
+        self.assertIn(
+            "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+            self.prepare_build_tools,
+        )
+        self.assertIn("python-version: '3.12'", self.prepare_build_tools)
+        self.assertIn("check-latest: false", self.prepare_build_tools)
+        self.assertNotIn("cache:", self.prepare_build_tools)
+
+    def test_prepare_build_tools_is_used_by_both_build_jobs(self):
+        self.assertEqual(self.workflow.count("uses: ./.github/actions/prepare-build-tools"), 2)
+        self.assertEqual(self.workflow.count("id: prepare-build-tools"), 2)
+
+    def test_system_packages_are_audited_before_conditional_apt_update(self):
+        for package in (
+            "binutils",
+            "clang-18",
+            "file",
+            "git",
+            "libmaxminddb-dev",
+            "unzip",
+            "zip",
+        ):
+            self.assertIn(f"          {package}", self.prepare_build_tools)
+        self.assertIn("dpkg-query", self.prepare_build_tools)
+        self.assertIn("if ((${#missing_packages[@]} > 0)); then", self.prepare_build_tools)
+        self.assertEqual(self.prepare_build_tools.count("sudo apt-get update -qy"), 1)
+        build_jobs = self.workflow.split("  package-release:", 1)[0]
+        self.assertNotIn("sudo apt-get update -qy", build_jobs)
+        self.assertIn("for command in clang-18 clang++-18 git file zip unzip", self.prepare_build_tools)
+
+    def test_python_and_setup_telemetry_are_used_after_setup(self):
+        self.assertNotIn("python3 -m pip", self.workflow)
+        build_module = self.workflow.split("  build-module:", 1)[1].split("  package-release:", 1)[0]
+        self.assertNotIn("python3", build_module)
+        self.assertIn("python ../configure.py", self.workflow)
+        self.assertEqual(self.workflow.count("python .github/scripts/cache_metrics.py record"), 2)
+        for output in (
+            "setup-seconds",
+            "apt-updated",
+            "missing-apt-packages",
+            "pip_install_seconds",
+            "python-version",
+        ):
+            self.assertIn(output, self.workflow)
 
     def test_cache_actions_are_split_between_restore_and_save(self):
         self.assertEqual(self.workflow.count("uses: actions/cache/restore@"), 4)
@@ -81,8 +131,17 @@ class CacheWorkflowTests(unittest.TestCase):
     def test_ci_requirements_are_pinned(self):
         self.assertEqual(
             REQUIREMENTS.read_text(encoding="utf-8").splitlines(),
-            ["pip==26.2.1", "importlib-metadata==9.0.0", "setuptools==45.2.0"],
+            ["pip==26.2.1", "importlib-metadata==9.0.0", "setuptools==68.1.2"],
         )
+
+    def test_python_toolchain_smoke_check_covers_both_build_jobs(self):
+        command = "python .github/scripts/verify_python_toolchain.py --check-ambuild"
+        self.assertEqual(self.workflow.count(command), 2)
+        self.assertIn("EXPECTED_PYTHON = (3, 12)", self.python_toolchain)
+        self.assertIn('EXPECTED_SETUPTOOLS = "68.1.2"', self.python_toolchain)
+        self.assertIn("import setuptools", self.python_toolchain)
+        self.assertIn("from distutils import core", self.python_toolchain)
+        self.assertIn("from ambuild2 import run, util", self.python_toolchain)
 
     def test_restore_status_contract_distinguishes_exact_partial_and_miss(self):
         self.assertEqual(cache_match_type("true"), "exact")
@@ -101,6 +160,18 @@ class CacheWorkflowTests(unittest.TestCase):
         self.assertIn("CACHE_RESTORE_STARTED_AT", self.workflow)
         self.assertIn("CACHE_RESTORE_FINISHED_AT", self.workflow)
         self.assertIn("Restore window (SDK + pip)", self.workflow)
+
+    def test_dependency_prepare_runs_on_pull_request_cache_miss(self):
+        prepare_block = self.workflow.split(
+            "      - name: Prepare pristine pinned dependencies\n", 1
+        )[1].split("      - name: Validate cached pinned dependencies\n", 1)[0]
+        self.assertIn("if: steps.restore-dependencies.outputs.cache-hit != 'true'", prepare_block)
+        self.assertNotIn("github.event_name != 'pull_request'", prepare_block)
+
+        save_block = self.workflow.split(
+            "      - name: Save pristine pinned dependency cache\n", 1
+        )[1].split("      - name: Install pinned AMBuild\n", 1)[0]
+        self.assertIn("github.event_name != 'pull_request'", save_block)
 
     def test_pull_requests_never_save_dependency_caches(self):
         save_blocks = re.findall(

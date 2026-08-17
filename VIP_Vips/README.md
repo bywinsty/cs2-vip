@@ -1,29 +1,22 @@
-# [VIP] VIPS
-My Discord server - https://discord.com/invite/g798xERK5Y
+[UA](README-UA.md) | [RU](README-RU.md)
 
-Allows you to view the list of VIP players using the command !vips
-There is a setting of display type (with or without group)
+# [VIP] [VIPs](https://github.com/bywinsty/cs2-vip-modules/tree/main/VIP_Vips)
 
-In **vip.phrases.txt** add:
+## Lists connected VIP players with `!vips`/`vips`.
+
+### Commands
+
+Console aliases are `sm_vips`, `mm_vips` and `vips`.
+
+### Configuration
+
+Create or edit `addons/configs/vip/vip_vips.ini`; this file is read by the module but is not declared in the current package manifest:
+
+```ini
+"VIP"
+{
+    "type" "0" // 0: show the group, 1: hide the group
+}
 ```
-	"VIPS_Title"
-	{
-		"en"	"VIP players:"
-		"ru"	"Вип игроки:"
-	}
-	"VIPS_NoPlayers"
-	{
-		"en"	"No VIP players found"
-		"ru"	"Не найдено ни одного вип игрока"
-	}
-	"VIPS_Player"
-	{
-		"en"	"%s (%s)"
-		"ru"	"%s (%s)"
-	}
-	"VIPS_Player2"
-	{
-		"en"	"%s"
-		"ru"	"%s"
-	}
-```
+
+The module uses `VIPS_Title`, `VIPS_Player`, `VIPS_Player2` and `VIPS_NoPlayers` from `vip.phrases.txt`.

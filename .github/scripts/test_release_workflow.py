@@ -18,7 +18,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
 
     def test_push_and_pull_request_branches(self):
         self.assertIn(
-            "push:\n    branches:\n      - main\n      - dev",
+            "push:\n    branches:\n      - main\n      - PR\n      - dev",
             self.workflow,
         )
         self.assertIn(
@@ -51,28 +51,70 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("git/ref/heads/main", self.release_job)
         self.assertIn("refs/tags/$RELEASE_TAG", self.release_job)
         self.assertIn("force=true", self.release_job)
+        self.assertIn('gh release delete "$RELEASE_TAG"', self.release_job)
+        self.assertNotIn("--cleanup-tag", self.release_job)
         self.assertIn("gh release create", self.release_job)
+        self.assertIn("--draft", self.release_job)
         self.assertIn("gh release edit", self.release_job)
+        self.assertIn("--draft=false", self.release_job)
+
+    def test_release_notes_follow_current_commit(self):
+        self.assertIn("Automated release from main.", self.release_job)
+        self.assertIn("$GITHUB_SHA", self.release_job)
+        self.assertIn("$GITHUB_RUN_ID", self.release_job)
 
     def test_release_contains_exact_expected_assets(self):
         self.assertIn("actions/download-artifact@", self.release_job)
         self.assertIn("pattern: VIP_*.tar.gz", self.release_job)
+        self.assertIn('expected.add("VIP_All_Modules.tar.gz")', self.release_job)
         self.assertIn('expected.add("VIP_Modules.tar.gz")', self.release_job)
-        self.assertIn("if len(actual) != 36", self.release_job)
-        self.assertIn("35 module archives", self.release_job)
+        self.assertIn("if len(actual) != 37", self.release_job)
+        self.assertIn("35 module archives and both combined archive names", self.release_job)
         self.assertIn("gh release upload", self.release_job)
         self.assertIn("--clobber", self.release_job)
         self.assertIn("Verify release assets", self.release_job)
-        self.assertIn('test "${#actual[@]}" -eq 36', self.release_job)
+        self.assertIn('test "${#actual[@]}" -eq 37', self.release_job)
+
+    def test_combined_archive_contains_nested_modules_archive(self):
+        package_job = self.workflow.split("  package-release:", 1)[1].split("  build-summary:", 1)[0]
+        self.assertIn(
+            'tar -czf "$GITHUB_WORKSPACE/release/Modules.tar.gz" VIP_*.tar.gz',
+            package_job,
+        )
+        self.assertIn("cp release/Modules.tar.gz combined-root/Modules.tar.gz", package_job)
+        self.assertIn(
+            "tar -czf release/VIP_All_Modules.tar.gz -C combined-root addons Modules.tar.gz",
+            package_job,
+        )
+        self.assertIn("expected_module_archives", package_job)
+        self.assertIn(
+            'validate_members(modules_archive, expected_module_archives, set(), "Modules.tar.gz")',
+            package_job,
+        )
+        self.assertNotIn("path: release/Modules.tar.gz", package_job)
+
+    def test_nested_modules_archive_is_excluded_from_release_checksums(self):
+        package_job = self.workflow.split("  package-release:", 1)[1].split("  build-summary:", 1)[0]
+        self.assertIn("-name 'VIP_*.tar.gz'", package_job)
+        self.assertIn('printf "%s\\n" VIP_*.tar.gz', package_job)
+        self.assertIn('release.glob("VIP_*.tar.gz")', package_job)
+        self.assertIn('VIP_Modules.tar.gz', package_job)
+        self.assertIn('VIP_All_Modules.tar.gz', package_job)
+        self.assertIn('cmp --silent release/VIP_All_Modules.tar.gz release/VIP_Modules.tar.gz', package_job)
+        self.assertNotIn("find release -maxdepth 1 -type f -name '*.tar.gz'", package_job)
+        self.assertNotIn('release.glob("*.tar.gz")', package_job)
 
     def test_build_info_is_never_published(self):
         self.assertIn("Modules_Build_Info.zip", self.release_job)
-        self.assertIn("gh release delete-asset", self.release_job)
         self.assertNotIn(
             'gh release upload "$RELEASE_TAG" "release-assets/Modules_Build_Info.zip"',
             self.release_job,
         )
         self.assertNotIn("Source code", self.release_job)
+
+    def test_legacy_combined_archive_is_uploaded(self):
+        self.assertIn("path: release/VIP_All_Modules.tar.gz", self.workflow)
+        self.assertIn("path: release/VIP_Modules.tar.gz", self.workflow)
 
 
 if __name__ == "__main__":

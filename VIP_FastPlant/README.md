@@ -1,12 +1,17 @@
-# [VIP] Fast Plant
-My Discord server - https://discord.com/invite/g798xERK5Y
+[UA](README-UA.md) | [RU](README-RU.md)
 
-Allows a VIP player to quickly place a bomb
+# [VIP] [Fast Plant](https://github.com/bywinsty/cs2-vip-modules/tree/main/VIP_FastPlant)
+
+## Allows a VIP player to quickly place a bomb
+
+### Feature key
 
 In **groups.ini** add:
 ```
 "fp" "0/1"
 ```
+
+### Translation key
 
 In **vip.phrases.txt** add:
 ```

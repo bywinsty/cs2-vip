@@ -1,12 +1,17 @@
-# [VIP] Colored Smoke
-My Discord server - https://discord.com/invite/g798xERK5Y
+[UA](README-UA.md) | [RU](README-RU.md)
 
-Adds the ability for VIP players to have multi-colored smoke
+# [VIP] [Colored Smoke](https://github.com/bywinsty/cs2-vip-modules/tree/main/VIP_Smoke)
+
+## Adds the ability for VIP players to have multi-colored smoke
+
+### Feature key
 
 In **groups.ini** add:
 ```
 "smoke_color" "random or rgb color"
 ```
+
+### Translation key
 
 In **vip.phrases.txt** add:
 ```

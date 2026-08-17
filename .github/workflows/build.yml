@@ -3,10 +3,12 @@ on:
   push:
     branches:
       - main
+      - PR
       - dev
   pull_request:
     branches:
       - main
+      - PR
   workflow_dispatch:
 
 permissions:
@@ -48,6 +50,8 @@ jobs:
         run: python3 .github/scripts/test_cache_workflow.py
       - name: Test release workflow contract
         run: python3 .github/scripts/test_release_workflow.py
+      - name: Test documentation links
+        run: python3 .github/scripts/test_documentation_links.py
       - id: manifest_contract
         name: Validate package manifest contract
         run: python3 .github/scripts/manifest_contract.py --manifest .github/package-manifest.json --github-output "$GITHUB_OUTPUT"
@@ -92,6 +96,9 @@ jobs:
       pip-cache-hit: ${{ steps.restore-pip.outputs.cache-hit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Prepare build tools
+        id: prepare-build-tools
+        uses: ./.github/actions/prepare-build-tools
       - name: Start dependency cache timer
         id: cache-restore-start
         run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
@@ -119,16 +126,17 @@ jobs:
         id: cache-restore-finish
         if: always()
         run: echo "finished_at=$(date +%s)" >> "$GITHUB_OUTPUT"
-      - name: Install dependencies
+      - name: Install CI Python dependencies
+        id: install-ci-dependencies
         run: |
           start_time=$(date +%s)
-          sudo apt-get update -qy
-          sudo apt-get install -y binutils clang-18 file git libmaxminddb-dev python3 python3-pip unzip zip
-          python3 -m pip install --upgrade -r "$GITHUB_WORKSPACE/.github/ci-requirements.txt"
-          echo "install_dependencies_seconds=$(( $(date +%s) - start_time ))" >> "$GITHUB_STEP_SUMMARY"
+          python -m pip install --upgrade -r "$GITHUB_WORKSPACE/.github/ci-requirements.txt"
+          pip_install_seconds=$(( $(date +%s) - start_time ))
+          echo "pip_install_seconds=$pip_install_seconds" >> "$GITHUB_OUTPUT"
+          echo "install_dependencies_seconds=$pip_install_seconds" >> "$GITHUB_STEP_SUMMARY"
       - name: Prepare pristine pinned dependencies
         id: prepare
-        if: steps.restore-dependencies.outputs.cache-hit != 'true' && github.event_name != 'pull_request'
+        if: steps.restore-dependencies.outputs.cache-hit != 'true'
         run: |
           start_time=$(date +%s)
           mkdir -p "$GITHUB_WORKSPACE/external"
@@ -176,7 +184,9 @@ jobs:
           key: ${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-ubuntu24.04-${{ env.AMBUILD_REF }}-${{ env.MMS_REF }}-${{ env.HL2SDK_REF }}-${{ env.SCHEMAENTITY_REF }}-${{ env.MANIFEST_REF }}
       - name: Install pinned AMBuild
         if: steps.restore-dependencies.outputs.cache-hit == 'true' || steps.prepare.outcome == 'success'
-        run: python3 -m pip install "$GITHUB_WORKSPACE/ambuild"
+        run: python -m pip install "$GITHUB_WORKSPACE/ambuild"
+      - name: Verify Python packaging toolchain
+        run: python .github/scripts/verify_python_toolchain.py --check-ambuild
       - name: Save pip cache
         id: save-pip
         if: github.event_name != 'pull_request' && steps.restore-pip.outputs.cache-hit != 'true'
@@ -201,6 +211,11 @@ jobs:
           PIP_RESTORE_OUTCOME: ${{ steps.restore-pip.outcome }}
           PIP_SAVE_OUTCOME: ${{ steps.save-pip.outcome }}
           EVENT_NAME: ${{ github.event_name }}
+          SYSTEM_SETUP_SECONDS: ${{ steps.prepare-build-tools.outputs.setup-seconds }}
+          APT_UPDATED: ${{ steps.prepare-build-tools.outputs.apt-updated }}
+          MISSING_APT_PACKAGES: ${{ steps.prepare-build-tools.outputs.missing-apt-packages }}
+          PIP_INSTALL_SECONDS: ${{ steps.install-ci-dependencies.outputs.pip_install_seconds }}
+          PYTHON_VERSION: ${{ steps.prepare-build-tools.outputs.python-version }}
         run: |
           cache_match_type() {
             case "${1:-}" in
@@ -229,6 +244,11 @@ jobs:
             echo "- pip restore: \`$(cache_match_type \"$PIP_CACHE_HIT\")\` (outcome: \`${PIP_RESTORE_OUTCOME:-unknown}\`)"
             echo "- pip save: \`${PIP_SAVE_OUTCOME:-skipped}\`"
             echo "- Restore window (SDK + pip): \`${restore_seconds}s\`"
+            echo "- System setup: \`${SYSTEM_SETUP_SECONDS:-unavailable}s\`"
+            echo "- apt update: \`${APT_UPDATED:-unavailable}\`"
+            echo "- Missing apt packages: \`${MISSING_APT_PACKAGES:-none}\`"
+            echo "- pip install: \`${PIP_INSTALL_SECONDS:-unavailable}s\`"
+            echo "- Python: \`${PYTHON_VERSION:-unavailable}\`"
             echo "- Cache writes from pull requests: disabled"
             echo "- Pinned refs: AMBuild=\`$AMBUILD_REF\`, MMS=\`$MMS_REF\`, HL2SDK=\`$HL2SDK_REF\`, SchemaEntity=\`$SCHEMAENTITY_REF\`, manifest=\`$MANIFEST_REF\`"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -248,8 +268,13 @@ jobs:
           PIP_CACHE_SAVE_OUTCOME: ${{ steps.save-pip.outcome }}
           CACHE_RESTORE_STARTED_AT: ${{ steps.cache-restore-start.outputs.started_at }}
           CACHE_RESTORE_FINISHED_AT: ${{ steps.cache-restore-finish.outputs.finished_at }}
+          SYSTEM_SETUP_SECONDS: ${{ steps.prepare-build-tools.outputs.setup-seconds }}
+          APT_UPDATED: ${{ steps.prepare-build-tools.outputs.apt-updated }}
+          MISSING_APT_PACKAGES: ${{ steps.prepare-build-tools.outputs.missing-apt-packages }}
+          PIP_INSTALL_SECONDS: ${{ steps.install-ci-dependencies.outputs.pip_install_seconds }}
+          PYTHON_VERSION: ${{ steps.prepare-build-tools.outputs.python-version }}
         run: |
-          python3 .github/scripts/cache_metrics.py record \
+          python .github/scripts/cache_metrics.py record \
             --job "$METRICS_JOB" \
             --output "cache-metrics/${METRICS_JOB}.json"
       - name: Upload dependency cache telemetry
@@ -279,6 +304,9 @@ jobs:
       PACKAGE_DIR: vip_modules
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Prepare build tools
+        id: prepare-build-tools
+        uses: ./.github/actions/prepare-build-tools
       - name: Start dependency cache timer
         id: cache-restore-start
         run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
@@ -306,11 +334,13 @@ jobs:
         id: cache-restore-finish
         if: always()
         run: echo "finished_at=$(date +%s)" >> "$GITHUB_OUTPUT"
-      - name: Install dependencies
+      - name: Install CI Python dependencies
+        id: install-ci-dependencies
         run: |
-          sudo apt-get update -qy
-          sudo apt-get install -y binutils clang-18 file git libmaxminddb-dev python3 python3-pip unzip zip
-          python3 -m pip install --upgrade -r "$GITHUB_WORKSPACE/.github/ci-requirements.txt"
+          start_time=$(date +%s)
+          python -m pip install --upgrade -r "$GITHUB_WORKSPACE/.github/ci-requirements.txt"
+          pip_install_seconds=$(( $(date +%s) - start_time ))
+          echo "pip_install_seconds=$pip_install_seconds" >> "$GITHUB_OUTPUT"
       - name: Restore or checkout pinned dependencies
         id: checkout-pinned-dependencies
         env:
@@ -339,7 +369,8 @@ jobs:
             echo "fallback-used=false" >> "$GITHUB_OUTPUT"
           fi
           schema_root="$GITHUB_WORKSPACE/external/SchemaEntity"
-          python3 -m pip install "$GITHUB_WORKSPACE/ambuild"
+          python -m pip install "$GITHUB_WORKSPACE/ambuild"
+          python .github/scripts/verify_python_toolchain.py --check-ambuild
           if [[ "$BUILD_ROOT" == "$MODULE_DIR" ]]; then
             schema_link="$GITHUB_WORKSPACE/SchemaEntity"
           else
@@ -370,6 +401,11 @@ jobs:
           PIP_CACHE_HIT: ${{ steps.restore-pip.outputs.cache-hit }}
           PIP_RESTORE_OUTCOME: ${{ steps.restore-pip.outcome }}
           FALLBACK_USED: ${{ steps.checkout-pinned-dependencies.outputs.fallback-used }}
+          SYSTEM_SETUP_SECONDS: ${{ steps.prepare-build-tools.outputs.setup-seconds }}
+          APT_UPDATED: ${{ steps.prepare-build-tools.outputs.apt-updated }}
+          MISSING_APT_PACKAGES: ${{ steps.prepare-build-tools.outputs.missing-apt-packages }}
+          PIP_INSTALL_SECONDS: ${{ steps.install-ci-dependencies.outputs.pip_install_seconds }}
+          PYTHON_VERSION: ${{ steps.prepare-build-tools.outputs.python-version }}
         run: |
           cache_match_type() {
             case "${1:-}" in
@@ -395,6 +431,11 @@ jobs:
             echo "- pip matched key: \`${PIP_CACHE_MATCHED_KEY:-none}\`"
             echo "- pip restore: \`$(cache_match_type \"$PIP_CACHE_HIT\")\` (outcome: \`${PIP_RESTORE_OUTCOME:-unknown}\`)"
             echo "- Restore window (SDK + pip): \`${restore_seconds}s\`"
+            echo "- System setup: \`${SYSTEM_SETUP_SECONDS:-unavailable}s\`"
+            echo "- apt update: \`${APT_UPDATED:-unavailable}\`"
+            echo "- Missing apt packages: \`${MISSING_APT_PACKAGES:-none}\`"
+            echo "- pip install: \`${PIP_INSTALL_SECONDS:-unavailable}s\`"
+            echo "- Python: \`${PYTHON_VERSION:-unavailable}\`"
             echo "- Fallback clone used: \`${FALLBACK_USED:-unknown}\`"
             echo "- Pinned refs: AMBuild=\`$AMBUILD_REF\`, MMS=\`$MMS_REF\`, HL2SDK=\`$HL2SDK_REF\`, SchemaEntity=\`$SCHEMAENTITY_REF\`, manifest=\`$MANIFEST_REF\`"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -413,8 +454,13 @@ jobs:
           FALLBACK_USED: ${{ steps.checkout-pinned-dependencies.outputs.fallback-used }}
           CACHE_RESTORE_STARTED_AT: ${{ steps.cache-restore-start.outputs.started_at }}
           CACHE_RESTORE_FINISHED_AT: ${{ steps.cache-restore-finish.outputs.finished_at }}
+          SYSTEM_SETUP_SECONDS: ${{ steps.prepare-build-tools.outputs.setup-seconds }}
+          APT_UPDATED: ${{ steps.prepare-build-tools.outputs.apt-updated }}
+          MISSING_APT_PACKAGES: ${{ steps.prepare-build-tools.outputs.missing-apt-packages }}
+          PIP_INSTALL_SECONDS: ${{ steps.install-ci-dependencies.outputs.pip_install_seconds }}
+          PYTHON_VERSION: ${{ steps.prepare-build-tools.outputs.python-version }}
         run: |
-          python3 .github/scripts/cache_metrics.py record \
+          python .github/scripts/cache_metrics.py record \
             --job "$METRICS_JOB" \
             --output "cache-metrics/${METRICS_JOB}.json"
       - name: Upload module cache telemetry
@@ -434,7 +480,7 @@ jobs:
           sed -i '/#include "schemasystem.h"/a #include "gametrace.h"' "$schema_root/globaltypes.h"
           sed -i 's/NetworkStateChanged_t/NetworkStateChangedData/g' "$schema_root/schemasystem.cpp"
           sed -i 's/FL_PAWN_FAKECLIENT/FL_BOT/g; s/FL_CONTROLLER_FAKECLIENT/FL_FAKECLIENT/g' "$schema_root/CCSPlayerPawn.h" "$schema_root/CCSPlayerController.h"
-          python3 - "$schema_root/ctimer.h" <<'PY'
+          python - "$schema_root/ctimer.h" <<'PY'
           import sys
           from pathlib import Path
           timer_path = Path(sys.argv[1])
@@ -456,7 +502,7 @@ jobs:
             sed -i '1i syntax = "proto2";' "$proto_path"
           fi
           grep -q '^syntax = "proto2";$' "$proto_path"
-          python3 - "$MANIFEST_PATH/manifests/cs2.json" "$GITHUB_WORKSPACE/external/hl2sdk-cs2" <<'PY'
+          python - "$MANIFEST_PATH/manifests/cs2.json" "$GITHUB_WORKSPACE/external/hl2sdk-cs2" <<'PY'
           import json
           import sys
           from pathlib import Path
@@ -481,24 +527,24 @@ jobs:
           rm -rf "$GITHUB_WORKSPACE/$BUILD_ROOT/build"
           mkdir -p "$GITHUB_WORKSPACE/$BUILD_ROOT/build"
           cd "$GITHUB_WORKSPACE/$BUILD_ROOT/build"
-          python3 ../configure.py --sdks cs2 --targets x86_64 --enable-optimize --hl2sdk-manifests="$MANIFEST_PATH" --mms_path="$GITHUB_WORKSPACE/external/metamod-source" --hl2sdk-root="$GITHUB_WORKSPACE/external"
+          python ../configure.py --sdks cs2 --targets x86_64 --enable-optimize --hl2sdk-manifests="$MANIFEST_PATH" --mms_path="$GITHUB_WORKSPACE/external/metamod-source" --hl2sdk-root="$GITHUB_WORKSPACE/external"
           ambuild
           echo "configure_build_seconds=$(( $(date +%s) - start_time ))" >> "$GITHUB_STEP_SUMMARY"
       - name: Validate package and create archive
         run: |
           package_root="$GITHUB_WORKSPACE/$BUILD_ROOT/build/package"
-          python3 "$GITHUB_WORKSPACE/.github/scripts/validate_package.py" \
+          python "$GITHUB_WORKSPACE/.github/scripts/validate_package.py" \
             --manifest "$GITHUB_WORKSPACE/.github/package-manifest.json" \
             --package-root "$package_root" \
             --package-key "${{ matrix.module }}"
           archive="$GITHUB_WORKSPACE/${{ matrix.module }}.tar.gz"
           tar -czf "$archive" -C "$package_root" addons
-          python3 "$GITHUB_WORKSPACE/.github/scripts/validate_package.py" \
+          python "$GITHUB_WORKSPACE/.github/scripts/validate_package.py" \
             --manifest "$GITHUB_WORKSPACE/.github/package-manifest.json" \
             --package-key "${{ matrix.module }}" \
             --archive "$archive" \
             --archive-format tar.gz
-          python3 "$GITHUB_WORKSPACE/.github/scripts/check_binary_smoke.py" \
+          python "$GITHUB_WORKSPACE/.github/scripts/check_binary_smoke.py" \
             --manifest "$GITHUB_WORKSPACE/.github/package-manifest.json" \
             --package-key "${{ matrix.module }}" \
             --package-root "$package_root"
@@ -562,11 +608,19 @@ jobs:
           rm -rf combined-root release info
           mkdir -p combined-root release info
           cp module-archives/VIP_*.tar.gz release/
+          (
+            cd module-archives
+            tar -czf "$GITHUB_WORKSPACE/release/Modules.tar.gz" VIP_*.tar.gz
+          )
+          test -s release/Modules.tar.gz
           for archive in module-archives/VIP_*.tar.gz; do
             tar -xzf "$archive" -C combined-root
           done
           test -d combined-root/addons
-          tar -czf release/VIP_Modules.tar.gz -C combined-root addons
+          cp release/Modules.tar.gz combined-root/Modules.tar.gz
+          tar -czf release/VIP_All_Modules.tar.gz -C combined-root addons Modules.tar.gz
+          cp release/VIP_All_Modules.tar.gz release/VIP_Modules.tar.gz
+          cmp --silent release/VIP_All_Modules.tar.gz release/VIP_Modules.tar.gz
 
       - name: Validate combined archive
         env:
@@ -575,31 +629,78 @@ jobs:
           python3 - <<'PY'
           import json
           import os
+          import posixpath
           import tarfile
           from pathlib import Path
 
           manifest = json.loads(Path(".github/package-manifest.json").read_text(encoding="utf-8"))
-          expected = {
+          expected_addons = {
               path
               for package in manifest["packages"].values()
               for path in package["files"]
           }
-          if len(expected) != int(os.environ["EXPECTED_PACKAGE_FILE_COUNT"]):
+          expected_module_archives = {
+              f"{module}.tar.gz" for module in manifest["packages"]
+          }
+          expected = expected_addons | {"Modules.tar.gz"}
+          if len(expected_addons) != int(os.environ["EXPECTED_PACKAGE_FILE_COUNT"]):
               raise SystemExit(
-                  f"Expected {os.environ['EXPECTED_PACKAGE_FILE_COUNT']} unique manifest files, found {len(expected)}"
+                  f"Expected {os.environ['EXPECTED_PACKAGE_FILE_COUNT']} unique manifest files, found {len(expected_addons)}"
               )
 
-          with tarfile.open("release/VIP_Modules.tar.gz", "r:gz") as archive:
-              actual = {member.name for member in archive.getmembers() if member.isfile()}
+          def normalized(name):
+              name = name.replace("\\", "/")
+              if "\x00" in name or name.startswith("/"):
+                  raise SystemExit(f"Unsafe archive path: {name!r}")
+              parts = name.rstrip("/").split("/")
+              if ".." in parts:
+                  raise SystemExit(f"Unsafe archive path: {name!r}")
+              result = posixpath.normpath(name)
+              if result in ("", ".", "..") or result.startswith("../"):
+                  raise SystemExit(f"Unsafe archive path: {name!r}")
+              return result
 
-          if actual != expected:
-              raise SystemExit(
-                  "Combined archive mismatch; "
-                  f"missing={sorted(expected - actual)}, extra={sorted(actual)}"
-              )
-          if any(name.endswith(".tar.gz") for name in actual):
-              raise SystemExit("Combined archive contains nested module archives")
-          print(f"Validated {len(actual)} package files in combined archive")
+          def validate_members(handle, expected_files, expected_directories, label):
+              files = set()
+              directories = set()
+              seen = set()
+              for member in handle.getmembers():
+                  name = normalized(member.name)
+                  if name in seen:
+                      raise SystemExit(f"Duplicate {label} member: {name}")
+                  seen.add(name)
+                  if member.isdir():
+                      directories.add(name)
+                      continue
+                  if member.issym() or member.islnk():
+                      raise SystemExit(f"Links are not allowed in {label}: {name}")
+                  if not member.isfile():
+                      raise SystemExit(f"Unsupported {label} member type: {name}")
+                  if member.size == 0:
+                      raise SystemExit(f"Empty {label} member: {name}")
+                  files.add(name)
+              if files != expected_files:
+                  raise SystemExit(
+                      f"{label} file mismatch; missing={sorted(expected_files - files)}, "
+                      f"extra={sorted(files - expected_files)}"
+                  )
+              if directories != expected_directories:
+                  raise SystemExit(
+                      f"{label} directory mismatch; missing={sorted(expected_directories - directories)}, "
+                      f"extra={sorted(directories - expected_directories)}"
+                  )
+
+          expected_directories = {
+              "/".join(path.split("/")[:index])
+              for path in expected_addons
+              for index in range(1, len(path.split("/")))
+          }
+          with tarfile.open("release/VIP_All_Modules.tar.gz", "r:gz") as archive:
+              validate_members(archive, expected, expected_directories, "combined archive")
+              modules_member = archive.getmember("Modules.tar.gz")
+              with tarfile.open(fileobj=archive.extractfile(modules_member), mode="r:gz") as modules_archive:
+                  validate_members(modules_archive, expected_module_archives, set(), "Modules.tar.gz")
+          print(f"Validated {len(expected_addons)} package files and {len(expected_module_archives)} module archives")
           PY
 
       - name: Create build reports
@@ -635,11 +736,11 @@ jobs:
         env:
           EXPECTED_RELEASE_ARCHIVE_COUNT: ${{ needs.discover.outputs.release_archive_count }}
         run: |
-          tarball_count="$(find release -maxdepth 1 -type f -name '*.tar.gz' | wc -l)"
+          tarball_count="$(find release -maxdepth 1 -type f -name 'VIP_*.tar.gz' | wc -l)"
           test "$tarball_count" -eq "$EXPECTED_RELEASE_ARCHIVE_COUNT"
           (
             cd release
-            for archive in $(printf "%s\n" *.tar.gz | sort); do
+            for archive in $(printf "%s\n" VIP_*.tar.gz | sort); do
               sha256sum "$archive"
             done
           ) > info/SHA256SUMS
@@ -662,8 +763,12 @@ jobs:
 
           release = Path("release")
           info = Path("info")
-          expected_archives = sorted(path.name for path in release.glob("*.tar.gz"))
-          expected_reports = {f"{path.name.removesuffix('.tar.gz')}-BUILD_REPORT.md" for path in release.glob("VIP_*.tar.gz") if path.name != "VIP_Modules.tar.gz"}
+          expected_archives = sorted(path.name for path in release.glob("VIP_*.tar.gz"))
+          expected_reports = {
+              f"{path.name.removesuffix('.tar.gz')}-BUILD_REPORT.md"
+              for path in release.glob("VIP_*.tar.gz")
+              if path.name not in {"VIP_All_Modules.tar.gz", "VIP_Modules.tar.gz"}
+          }
           expected = {"SHA256SUMS"} | expected_reports
           if len(expected_archives) != int(os.environ["EXPECTED_RELEASE_ARCHIVE_COUNT"]):
               raise SystemExit(
@@ -699,6 +804,14 @@ jobs:
           PY
 
       - name: Upload combined module archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          path: release/VIP_All_Modules.tar.gz
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload legacy combined module archive alias
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           path: release/VIP_Modules.tar.gz
@@ -797,17 +910,18 @@ jobs:
 
           manifest = json.loads(Path(".github/package-manifest.json").read_text(encoding="utf-8"))
           expected = {f"{module}.tar.gz" for module in manifest["packages"]}
+          expected.add("VIP_All_Modules.tar.gz")
           expected.add("VIP_Modules.tar.gz")
           actual = {path.name for path in Path("release-assets").glob("VIP_*.tar.gz")}
           if actual != expected:
               raise SystemExit(
                   f"Unexpected release inputs: missing={sorted(expected - actual)}, extra={sorted(actual)}"
               )
-          if len(actual) != 36:
-              raise SystemExit(f"Expected 36 tar.gz assets, found {len(actual)}")
+          if len(actual) != 37:
+              raise SystemExit(f"Expected 37 tar.gz assets, found {len(actual)}")
           if Path("release-assets/Modules_Build_Info.zip").exists():
               raise SystemExit("Modules_Build_Info.zip must not be a release input")
-          print("Validated 35 module archives and VIP_Modules.tar.gz")
+          print("Validated 35 module archives and both combined archive names")
           PY
 
       - name: Check current main tip
@@ -832,22 +946,25 @@ jobs:
           fi
           test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')" = "$GITHUB_SHA"
 
-      - name: Create or update release
+      - name: Delete existing release
+        if: steps.main-tip.outputs.stale != 'true'
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release delete "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --yes
+          fi
+
+      - name: Create replacement draft release
         if: steps.main-tip.outputs.stale != 'true'
         run: |
           notes=$'Automated release from main.\n\nCommit: '"$GITHUB_SHA"$'\nWorkflow run: https://github.com/'"$GITHUB_REPOSITORY"'/actions/runs/'"$GITHUB_RUN_ID"
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG"               --repo "$GITHUB_REPOSITORY"               --title "$RELEASE_TITLE"               --notes "$notes"               --target "$GITHUB_SHA"
-          else
-            gh release create "$RELEASE_TAG"               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "$RELEASE_TITLE"               --notes "$notes"
-          fi
-
-      - name: Remove forbidden metadata asset
-        if: steps.main-tip.outputs.stale != 'true'
-        run: |
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fxq 'Modules_Build_Info.zip'; then
-            gh release delete-asset "$RELEASE_TAG" Modules_Build_Info.zip               --repo "$GITHUB_REPOSITORY"               --yes
-          fi
+          gh release create "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$RELEASE_TITLE" \
+            --notes "$notes" \
+            --draft
 
       - name: Upload release assets
         if: steps.main-tip.outputs.stale != 'true'
@@ -872,5 +989,12 @@ jobs:
             echo "Modules_Build_Info.zip must not be published"
             exit 1
           fi
-          test "${#actual[@]}" -eq 36
-          echo "Release contains exactly 36 tar.gz assets."
+          test "${#actual[@]}" -eq 37
+          echo "Release contains exactly 37 tar.gz assets, including the legacy combined archive alias."
+
+      - name: Publish replacement release
+        if: steps.main-tip.outputs.stale != 'true'
+        run: |
+          gh release edit "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false

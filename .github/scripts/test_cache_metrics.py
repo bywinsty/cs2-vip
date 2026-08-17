@@ -7,15 +7,28 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cache_metrics import aggregate_directory, aggregate_records, render_markdown
+from cache_metrics import (
+    _setup_stats,
+    aggregate_directory,
+    aggregate_records,
+    record_from_environment,
+    render_markdown,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / ".github" / "package-manifest.json"
 
 
-def record(job: str, sdk_hit: str = "true", pip_hit: str = "true", fallback: str = "false", seconds: int = 4) -> dict:
-    return {
+def record(
+    job: str,
+    sdk_hit: str = "true",
+    pip_hit: str = "true",
+    fallback: str = "false",
+    seconds: int = 4,
+    setup: dict | None = None,
+) -> dict:
+    payload = {
         "schema_version": 1,
         "run_id": "123",
         "commit": "abc",
@@ -24,9 +37,54 @@ def record(job: str, sdk_hit: str = "true", pip_hit: str = "true", fallback: str
         "pip": {"hit": pip_hit},
         "restore_seconds": seconds,
     }
+    if setup is not None:
+        payload["setup"] = setup
+    return payload
 
 
 class CacheMetricsTests(unittest.TestCase):
+    def test_record_includes_setup_telemetry_from_environment(self):
+        telemetry = record_from_environment(
+            "VIP_A",
+            {
+                "SYSTEM_SETUP_SECONDS": "7",
+                "APT_UPDATED": "false",
+                "MISSING_APT_PACKAGES": "libmaxminddb-dev",
+                "PIP_INSTALL_SECONDS": "2",
+                "PYTHON_VERSION": "3.12.3",
+            },
+        )
+
+        self.assertEqual(
+            telemetry["setup"],
+            {
+                "system_setup_seconds": 7,
+                "apt_updated": False,
+                "missing_apt_packages": ["libmaxminddb-dev"],
+                "pip_install_seconds": 2,
+                "python_version": "3.12.3",
+            },
+        )
+
+    def test_record_from_environment_empty_input_keeps_intentional_setup_schema_change(self):
+        telemetry = record_from_environment(
+            "'a longer string'",
+            {"n": 0, "s": "x", "l": [1, 2]},
+        )
+
+        self.assertEqual(telemetry["job"], "'a longer string'")
+        self.assertEqual(telemetry["runner"], {"os": None, "arch": None})
+        self.assertEqual(
+            telemetry["setup"],
+            {
+                "system_setup_seconds": None,
+                "apt_updated": None,
+                "missing_apt_packages": [],
+                "pip_install_seconds": None,
+                "python_version": None,
+            },
+        )
+
     def test_all_modules_exact(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         modules = sorted(manifest["packages"])
@@ -43,6 +101,16 @@ class CacheMetricsTests(unittest.TestCase):
         self.assertEqual(summary["fallback_count"], 0)
         self.assertEqual(summary["restore_seconds"], {"min": 4, "max": 4, "average": 4})
         self.assertEqual(summary["warnings"], [])
+
+    def test_aggregate_records_accepts_list_tuple_and_one_shot_generator(self):
+        values = [record("prepare-dependencies"), record("VIP_A")]
+
+        for records in (values, tuple(values), (item for item in values)):
+            with self.subTest(records_type=type(records).__name__):
+                summary = aggregate_records(records, ["VIP_A"])
+
+                self.assertEqual(summary["actual_module_count"], 1)
+                self.assertEqual(summary["warnings"], [])
 
     def test_partial_pip_hit_is_counted(self):
         modules = ["VIP_A", "VIP_B"]
@@ -92,7 +160,140 @@ class CacheMetricsTests(unittest.TestCase):
 
         self.assertIn("SDK exact hits: `2/2` (100%)", markdown)
         self.assertIn("Restore window: `2–6s (avg 4s)`", markdown)
+        self.assertIn("System setup: `unavailable`", markdown)
+        self.assertIn("apt updates: `unavailable`", markdown)
         self.assertIn("Warnings: none", markdown)
+
+    def test_setup_telemetry_is_aggregated(self):
+        modules = ["VIP_A", "VIP_B", "VIP_C"]
+        setup = [
+            {"system_setup_seconds": 2, "apt_updated": False, "missing_apt_packages": [], "pip_install_seconds": 3, "python_version": "3.12.3"},
+            {"system_setup_seconds": 8, "apt_updated": True, "missing_apt_packages": ["libmaxminddb-dev"], "pip_install_seconds": 5, "python_version": "3.12.3"},
+            {"system_setup_seconds": 4, "apt_updated": False, "missing_apt_packages": [], "pip_install_seconds": 4, "python_version": "3.12.3"},
+        ]
+        summary = aggregate_records(
+            [record("prepare-dependencies", setup=setup[0])]
+            + [record(module, setup=item) for module, item in zip(modules, setup)],
+            modules,
+        )
+
+        self.assertEqual(summary["setup"]["records_with_setup"], 4)
+        self.assertEqual(summary["setup"]["system_setup_seconds"], {"min": 2, "max": 8, "average": 4})
+        self.assertEqual(summary["setup"]["pip_install_seconds"], {"min": 3, "max": 5, "average": 3.75})
+        self.assertEqual(summary["setup"]["apt_updated_jobs"], 1)
+        self.assertEqual(summary["setup"]["missing_apt_packages"], ["libmaxminddb-dev"])
+
+        markdown = render_markdown(summary)
+        self.assertIn("System setup: `2–8s (avg 4s)`", markdown)
+        self.assertIn("apt updates: `1/4`", markdown)
+        self.assertIn("Missing apt packages: `libmaxminddb-dev`", markdown)
+
+    def test_setup_stats_accepts_one_shot_generator(self):
+        records = (
+            item
+            for item in [
+                record(
+                    "prepare-dependencies",
+                    setup={
+                        "system_setup_seconds": 1,
+                        "apt_updated": True,
+                        "missing_apt_packages": ["libmaxminddb-dev"],
+                        "pip_install_seconds": 2,
+                    },
+                ),
+                record(
+                    "VIP_A",
+                    setup={
+                        "system_setup_seconds": 3,
+                        "apt_updated": False,
+                        "missing_apt_packages": [],
+                        "pip_install_seconds": 6,
+                    },
+                ),
+            ]
+        )
+
+        summary = _setup_stats(records)
+
+        self.assertEqual(summary["records_with_setup"], 2)
+        self.assertEqual(summary["apt_updated_total"], 2)
+        self.assertEqual(summary["apt_updated_jobs"], 1)
+        self.assertEqual(summary["system_setup_seconds"], {"min": 1, "max": 3, "average": 2})
+        self.assertEqual(summary["pip_install_seconds"], {"min": 2, "max": 6, "average": 4})
+        self.assertEqual(summary["missing_apt_packages"], ["libmaxminddb-dev"])
+
+    def test_mixed_legacy_and_setup_records_use_setup_denominator(self):
+        summary = aggregate_records(
+            [
+                record(
+                    "prepare-dependencies",
+                    setup={
+                        "system_setup_seconds": 1,
+                        "apt_updated": True,
+                        "missing_apt_packages": [],
+                        "pip_install_seconds": 2,
+                    },
+                ),
+                record("VIP_A"),
+            ],
+            ["VIP_A"],
+        )
+
+        self.assertEqual(summary["setup"]["records_with_setup"], 1)
+        self.assertEqual(summary["setup"]["apt_updated_total"], 1)
+        self.assertIn("apt updates: `1/1`", render_markdown(summary))
+
+    def test_old_records_without_setup_are_unavailable(self):
+        summary = aggregate_records(
+            [record("prepare-dependencies"), record("VIP_A")],
+            ["VIP_A"],
+        )
+
+        self.assertEqual(summary["setup"]["records_with_setup"], 0)
+        self.assertEqual(
+            summary["setup"]["system_setup_seconds"],
+            {"min": None, "max": None, "average": None},
+        )
+        markdown = render_markdown(summary)
+        self.assertIn("System setup: `unavailable`", markdown)
+        self.assertIn("pip install: `unavailable`", markdown)
+        self.assertIn("Missing apt packages: `unavailable`", markdown)
+
+    def test_zero_setup_values_and_no_apt_update_are_preserved(self):
+        zero_setup = {
+            "system_setup_seconds": 0,
+            "apt_updated": False,
+            "missing_apt_packages": [],
+            "pip_install_seconds": 0,
+            "python_version": "3.12.3",
+        }
+        summary = aggregate_records(
+            [record("prepare-dependencies", setup=zero_setup), record("VIP_A", setup=zero_setup)],
+            ["VIP_A"],
+        )
+
+        self.assertEqual(summary["setup"]["system_setup_seconds"], {"min": 0, "max": 0, "average": 0})
+        self.assertEqual(summary["setup"]["pip_install_seconds"], {"min": 0, "max": 0, "average": 0})
+        self.assertEqual(summary["setup"]["apt_updated_jobs"], 0)
+        self.assertEqual(summary["setup"]["missing_apt_packages"], [])
+
+    def test_malformed_missing_apt_packages_are_ignored(self):
+        modules = ["VIP_A", "VIP_B", "VIP_C", "VIP_D"]
+        malformed = [
+            None,
+            "libshould-not-be-treated-as-a-list",
+            42,
+            ["libvalid", "", 17, None],
+        ]
+        records = [record("prepare-dependencies")]
+        records.extend(
+            record(module, setup={"missing_apt_packages": value})
+            for module, value in zip(modules, malformed)
+        )
+
+        summary = aggregate_records(records, modules)
+
+        self.assertEqual(summary["setup"]["missing_apt_packages"], ["libvalid"])
 
 
 if __name__ == "__main__":

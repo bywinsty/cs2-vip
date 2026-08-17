@@ -37,7 +37,8 @@
     "VIP_BuyTeamWeapon": {
       "files": [
         "addons/vip_modules/vip_btw.so",
-        "addons/metamod/vip_btw.vdf"
+        "addons/metamod/vip_btw.vdf",
+        "addons/configs/vip/vip_btw.ini"
       ],
       "binary": "addons/vip_modules/vip_btw.so",
       "vdf": "addons/metamod/vip_btw.vdf"
