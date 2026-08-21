@@ -34,7 +34,7 @@ python .github/scripts/apply_sdk_compatibility_patches.py \
 
 mkdir build && cd build
 CC=clang-18 CXX=clang++-18 python ../configure.py \
-  --sdks cs2 --targets x86_64 --enable-optimize \
+  --sdks cs2 --targets x86_64 --enable-optimize --disable-debug \
   --hl2sdk-manifests="$VIP_MANIFESTS" \
   --mms_path="$VIP_EXTERNAL/metamod-source" \
   --hl2sdk-root="$VIP_EXTERNAL" \

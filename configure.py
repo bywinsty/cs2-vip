@@ -33,6 +33,8 @@ parser.options.add_argument('--schemaentity-root', type=str, dest='schemaentity_
                        help='SchemaEntity source tree folder')
 parser.options.add_argument('--enable-debug', action='store_const', const='1', dest='debug',
                        help='Enable debugging symbols')
+parser.options.add_argument('--disable-debug', action='store_const', const='0', dest='debug',
+                       help='Disable debugging symbols for reproducible release builds')
 parser.options.add_argument('--enable-optimize', action='store_const', const='1', dest='opt',
                        help='Enable optimization')
 parser.options.add_argument('-s', '--sdks', default='all', dest='sdks',

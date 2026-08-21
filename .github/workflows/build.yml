@@ -182,6 +182,7 @@ jobs:
             --sdks cs2 \
             --targets x86_64 \
             --enable-optimize \
+            --disable-debug \
             --hl2sdk-manifests="$RUNNER_TEMP/hl2sdk-manifests" \
             --mms_path="$MMS_PATH" \
             --hl2sdk-root="$HL2SDK_ROOT" \
@@ -232,6 +233,7 @@ jobs:
             --sdks cs2 \
             --targets x86_64 \
             --enable-optimize \
+            --disable-debug \
             --hl2sdk-manifests="$RUNNER_TEMP/hl2sdk-manifests" \
             --mms_path="$MMS_PATH" \
             --hl2sdk-root="$HL2SDK_ROOT" \

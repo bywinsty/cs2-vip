@@ -149,6 +149,13 @@ class MMSPluginConfig(object):
         '-Wdate-time',
       ]
 
+      for path in (os.path.abspath(builder.sourcePath), os.path.abspath(builder.buildPath)):
+        cxx.cflags += [
+          '-ffile-prefix-map={}=.'.format(path),
+          '-fdebug-prefix-map={}=.'.format(path),
+          '-fmacro-prefix-map={}=.'.format(path),
+        ]
+
       cxx.defines += ['_FORTIFY_SOURCE=3']
       cxx.defines += ['VIP_BUILD_DATE=\"{}\"'.format(self.build_date)]
 
