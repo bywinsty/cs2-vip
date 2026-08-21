@@ -1,0 +1,44 @@
+name: Runtime Release Preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to verify before running the local server harness
+        required: true
+        default: dev
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify-release:
+    name: Verify release and runtime harness contract
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Test runtime harness safety
+        run: python3 .github/scripts/test_runtime_validate.py
+
+      - name: Download release subjects
+        run: |
+          mkdir release-files
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern vip.zip \
+            --pattern vip.spdx.json \
+            --dir release-files
+
+      - name: Verify checksums, provenance, and SBOM attestation
+        run: |
+          python3 .github/scripts/verify_spdx_subject.py \
+            --archive release-files/vip.zip \
+            --sbom release-files/vip.spdx.json
+          gh attestation verify release-files/vip.zip --repo "$GITHUB_REPOSITORY"
+          gh attestation verify release-files/vip.spdx.json --repo "$GITHUB_REPOSITORY"

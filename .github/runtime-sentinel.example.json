@@ -1,0 +1,34 @@
+{
+  "purpose": "vip-ci-test-server",
+  "production": false,
+  "game_directory": "game/csgo",
+  "server_command": [
+    "game/bin/linuxsteamrt64/cs2"
+  ],
+  "server_build_id_file": "steamapps/appmanifest_730.acf",
+  "minimum_free_gib": 10,
+  "map": "de_dust2",
+  "startup_timeout_seconds": 180,
+  "runtime_dependencies": [
+    {
+      "name": "Metamod:Source",
+      "path": "game/csgo/addons/metamod/bin/linuxsteamrt64/server.so",
+      "version": "PINNED_VERSION"
+    },
+    {
+      "name": "Menu API",
+      "path": "game/csgo/addons/menu_system/menu_system.so",
+      "version": "PINNED_VERSION"
+    },
+    {
+      "name": "SQL runtime",
+      "path": "game/csgo/addons/vip/runtime/sql-driver.so",
+      "version": "PINNED_VERSION"
+    }
+  ],
+  "required_log_patterns": [
+    "Metamod:Source",
+    "VIP Core"
+  ],
+  "additional_arguments": []
+}
