@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - Core
-      - dev-core
+      - dev
   pull_request:
     branches:
       - Core
@@ -223,21 +223,23 @@ jobs:
           name: cache-metrics-build
           path: cache-metrics/build.json
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 30
 
       - name: Upload archive to artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: compile
           path: vip.zip
+          archive: true
           if-no-files-found: error
+          retention-days: 30
 
   publish-release:
     name: Publish ${{ github.ref_name }} release
     if: >-
       ${{
         github.event_name == 'push' &&
-        (github.ref_name == 'Core' || github.ref_name == 'dev-core') &&
+        (github.ref_name == 'Core' || github.ref_name == 'dev') &&
         needs.build.result == 'success'
       }}
     needs: build
@@ -251,7 +253,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ github.ref_name }}
       RELEASE_TITLE: ${{ github.ref_name }}
-      IS_PRERELEASE: ${{ github.ref_name == 'dev-core' }}
+      IS_PRERELEASE: ${{ github.ref_name == 'dev' }}
 
     steps:
       - name: Checkout repository
@@ -286,30 +288,28 @@ jobs:
         if: steps.branch-tip.outputs.stale != 'true'
         run: bash .github/scripts/update_release_tag.sh
 
-      - name: Delete existing release
-        if: steps.branch-tip.outputs.stale != 'true'
-        run: |
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release delete "$RELEASE_TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --yes
-          fi
-
-      - name: Create replacement release
+      - name: Create or update release
         if: steps.branch-tip.outputs.stale != 'true'
         run: |
           notes=$'Automated release from '"$RELEASE_TAG"$'.\n\nCommit: '"$GITHUB_SHA"$'\nWorkflow run: https://github.com/'"$GITHUB_REPOSITORY"'/actions/runs/'"$GITHUB_RUN_ID"
-          if [[ "$IS_PRERELEASE" == "true" ]]; then
-            gh release create "$RELEASE_TAG" \
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --title "$RELEASE_TITLE" \
               --notes "$notes" \
-              --prerelease
+              --draft=false \
+              --prerelease="$IS_PRERELEASE"
           else
-            gh release create "$RELEASE_TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "$RELEASE_TITLE" \
+            create_args=(
+              "$RELEASE_TAG"
+              --repo "$GITHUB_REPOSITORY"
+              --title "$RELEASE_TITLE"
               --notes "$notes"
+            )
+            if [[ "$IS_PRERELEASE" == "true" ]]; then
+              create_args+=(--prerelease)
+            fi
+            gh release create "${create_args[@]}"
           fi
 
       - name: Upload release

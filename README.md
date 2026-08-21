@@ -1,7 +1,7 @@
 # [VIP] CORE | LIST OF MODULES - [click](https://github.com/Pisex/cs2-vip-modules)
 
 ## Requirements
-- CS2 server (Linux or Windows)
+- CS2 server on Linux x86-64 (Windows builds are not currently published or supported)
 - [sql_mm](https://github.com/zer0k-z/sql_mm) plugins; sql_mm is an external dependency and is not included in the VIP release archive
 - Database data configured in `addons/configs/databases.cfg`
 
