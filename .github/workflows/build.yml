@@ -189,7 +189,10 @@ jobs:
           ambuild
 
       - name: Validate ELF hardening
-        run: python .github/scripts/verify_elf_hardening.py build/package/addons/vip/vip.so
+        run: >-
+          python .github/scripts/verify_elf_hardening.py
+          build/package/addons/vip/vip.so
+          --library-path "$HL2SDK_ROOT/hl2sdk-cs2/lib/linux64"
 
       - name: Validate and create archive
         run: |
@@ -235,7 +238,9 @@ jobs:
             --schemaentity-root="$SCHEMA_ROOT"
           ambuild
           cd ..
-          python .github/scripts/verify_elf_hardening.py build-repro/package/addons/vip/vip.so
+          python .github/scripts/verify_elf_hardening.py \
+            build-repro/package/addons/vip/vip.so \
+            --library-path "$HL2SDK_ROOT/hl2sdk-cs2/lib/linux64"
           cmp build/package/addons/vip/vip.so build-repro/package/addons/vip/vip.so
           python .github/scripts/create_reproducible_archive.py \
             --root build-repro/package \

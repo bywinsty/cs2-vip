@@ -4,12 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import subprocess
 
 
-def output(*command: str) -> str:
-    result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+def output(*command: str, env: dict[str, str] | None = None) -> str:
+    result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
     if result.returncode:
         raise SystemExit(f"command failed ({result.returncode}): {' '.join(command)}\n{result.stdout}")
     return result.stdout
@@ -18,6 +19,7 @@ def output(*command: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("binary", type=Path)
+    parser.add_argument("--library-path", type=Path)
     args = parser.parse_args()
     binary = str(args.binary)
     header = output("readelf", "-hW", binary)
@@ -38,7 +40,12 @@ def main() -> int:
         raise SystemExit("ELF build-id is missing")
     if "__stack_chk_fail" not in output("readelf", "-sW", binary):
         raise SystemExit("stack protector symbol is missing")
-    relocations = output("ldd", "-r", binary)
+    loader_env = os.environ.copy()
+    if args.library_path:
+        loader_env["LD_LIBRARY_PATH"] = str(args.library_path.resolve()) + os.pathsep + loader_env.get("LD_LIBRARY_PATH", "")
+    relocations = output("ldd", "-r", binary, env=loader_env)
+    if "not found" in relocations:
+        raise SystemExit(f"runtime library was not found:\n{relocations}")
     if "undefined symbol:" in relocations:
         raise SystemExit(f"unresolved symbol detected:\n{relocations}")
     print(f"ELF hardening contract passed: {binary}")
