@@ -56,6 +56,12 @@ jobs:
       - name: Test reproducible archive helper
         run: python .github/scripts/test_reproducible_archive.py
 
+      - name: Test SPDX SBOM generator
+        run: python .github/scripts/test_generate_spdx_sbom.py
+
+      - name: Test runtime harness safety
+        run: python .github/scripts/test_runtime_validate.py
+
       - name: Compile public ABI probes
         run: |
           clang++-18 -std=c++17 -fsyntax-only tests/abi_legacy_probe.cpp
@@ -251,6 +257,39 @@ jobs:
           cmp "$RUNNER_TEMP/vip.zip" "$RUNNER_TEMP/vip-repro.zip"
           sha256sum build/package/addons/vip/vip.so "$RUNNER_TEMP/vip.zip"
 
+      - name: Generate and verify SPDX SBOM
+        run: |
+          python .github/scripts/generate_spdx_sbom.py \
+            --name cs2-vip \
+            --version "$GITHUB_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --archive "$RUNNER_TEMP/vip.zip" \
+            --root build/package \
+            --requirements .github/ci-requirements.txt \
+            --git-dependency "AMBuild=https://github.com/alliedmodders/ambuild#$AMBUILD_REF" \
+            --git-dependency "Metamod-Source=https://github.com/alliedmodders/metamod-source#$MMS_REF" \
+            --git-dependency "HL2SDK-CS2=https://github.com/alliedmodders/hl2sdk#$HL2SDK_REF" \
+            --git-dependency "HL2SDK-Manifests=https://github.com/alliedmodders/hl2sdk-manifests#$MANIFEST_REF" \
+            --git-dependency "SchemaEntity=https://github.com/pisex/SchemaEntity#$SCHEMAENTITY_REF" \
+            --output "$RUNNER_TEMP/vip.spdx.json"
+          python .github/scripts/verify_spdx_subject.py \
+            --archive "$RUNNER_TEMP/vip.zip" \
+            --sbom "$RUNNER_TEMP/vip.spdx.json"
+          python .github/scripts/generate_spdx_sbom.py \
+            --name cs2-vip \
+            --version "$GITHUB_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --archive "$RUNNER_TEMP/vip.zip" \
+            --root build/package \
+            --requirements .github/ci-requirements.txt \
+            --git-dependency "AMBuild=https://github.com/alliedmodders/ambuild#$AMBUILD_REF" \
+            --git-dependency "Metamod-Source=https://github.com/alliedmodders/metamod-source#$MMS_REF" \
+            --git-dependency "HL2SDK-CS2=https://github.com/alliedmodders/hl2sdk#$HL2SDK_REF" \
+            --git-dependency "HL2SDK-Manifests=https://github.com/alliedmodders/hl2sdk-manifests#$MANIFEST_REF" \
+            --git-dependency "SchemaEntity=https://github.com/pisex/SchemaEntity#$SCHEMAENTITY_REF" \
+            --output "$RUNNER_TEMP/vip.repro.spdx.json"
+          cmp "$RUNNER_TEMP/vip.spdx.json" "$RUNNER_TEMP/vip.repro.spdx.json"
+
       - name: Verify build left checkout clean
         run: |
           git diff --exit-code
@@ -290,7 +329,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: compile
-          path: ${{ runner.temp }}/vip.zip
+          path: |
+            ${{ runner.temp }}/vip.zip
+            ${{ runner.temp }}/vip.spdx.json
           archive: true
           if-no-files-found: error
           retention-days: 30
@@ -300,12 +341,21 @@ jobs:
     if: >-
       ${{
         github.event_name == 'push' &&
-        (github.ref_name == 'Core' || github.ref_name == 'dev') &&
+        (
+          github.ref_name == 'dev' ||
+          (
+            github.ref_name == 'Core' &&
+            vars.RUNTIME_VALIDATION_SHA == github.sha &&
+            vars.RUNTIME_VALIDATION_REPORT_URL != ''
+          )
+        ) &&
         needs.build.result == 'success'
       }}
     needs: build
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     runs-on: ubuntu-24.04
     concurrency:
       group: release-${{ github.ref_name }}
@@ -315,6 +365,7 @@ jobs:
       RELEASE_TAG: ${{ github.ref_name }}
       RELEASE_TITLE: ${{ github.ref_name }}
       IS_PRERELEASE: ${{ github.ref_name == 'dev' }}
+      RUNTIME_VALIDATION_REPORT_URL: ${{ vars.RUNTIME_VALIDATION_REPORT_URL }}
 
     steps:
       - name: Checkout repository
@@ -329,10 +380,14 @@ jobs:
       - name: Verify build artifact
         run: |
           test "$(find release-files -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 1
+          test "$(find release-files -maxdepth 1 -type f -name '*.spdx.json' | wc -l)" -eq 1
           test "$(find release-files -maxdepth 1 -type f -name 'BUILD_REPORT.md' | wc -l)" -eq 0
           ls -la release-files
           zip -T release-files/*.zip
           sha256sum release-files/*.zip
+          python .github/scripts/verify_spdx_subject.py \
+            --archive release-files/vip.zip \
+            --sbom release-files/vip.spdx.json
 
       - name: Check current branch tip
         id: branch-tip
@@ -349,10 +404,32 @@ jobs:
         if: steps.branch-tip.outputs.stale != 'true'
         run: bash .github/scripts/update_release_tag.sh
 
+      - name: Attest release archive provenance
+        if: steps.branch-tip.outputs.stale != 'true'
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: release-files/vip.zip
+
+      - name: Attest release archive SBOM
+        if: steps.branch-tip.outputs.stale != 'true'
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: release-files/vip.zip
+          sbom-path: release-files/vip.spdx.json
+
+      - name: Attest SPDX document provenance
+        if: steps.branch-tip.outputs.stale != 'true'
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: release-files/vip.spdx.json
+
       - name: Create or update release
         if: steps.branch-tip.outputs.stale != 'true'
         run: |
           notes=$'Automated release from '"$RELEASE_TAG"$'.\n\nCommit: '"$GITHUB_SHA"$'\nWorkflow run: https://github.com/'"$GITHUB_REPOSITORY"'/actions/runs/'"$GITHUB_RUN_ID"
+          if [[ "$IS_PRERELEASE" != "true" ]]; then
+            notes+=$'\nRuntime validation: '"$RUNTIME_VALIDATION_REPORT_URL"
+          fi
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
@@ -378,11 +455,27 @@ jobs:
       - name: Upload release
         if: steps.branch-tip.outputs.stale != 'true'
         run: |
-          gh release upload "$RELEASE_TAG" release-files/*.zip \
+          gh release upload "$RELEASE_TAG" release-files/vip.zip release-files/vip.spdx.json \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
 
       - name: Verify release assets
         if: steps.branch-tip.outputs.stale != 'true'
         run: |
-          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort)" = "vip.zip"
+          expected=$'vip.spdx.json\nvip.zip'
+          actual="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort)"
+          test "$actual" = "$expected"
+          for subject in release-files/vip.zip release-files/vip.spdx.json; do
+            verified=false
+            for attempt in 1 2 3 4 5; do
+              if gh attestation verify "$subject" --repo "$GITHUB_REPOSITORY"; then
+                verified=true
+                break
+              fi
+              sleep 3
+            done
+            test "$verified" = true
+          done
+          python .github/scripts/verify_spdx_subject.py \
+            --archive release-files/vip.zip \
+            --sbom release-files/vip.spdx.json
