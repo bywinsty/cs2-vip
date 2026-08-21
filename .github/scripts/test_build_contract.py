@@ -33,6 +33,8 @@ def main() -> int:
             failures.append(f"hardening requirement is missing: {required}")
     if "builder.sourcePath, '..', 'SchemaEntity'" in (ROOT / "AMBuilder").read_text(encoding="utf-8"):
         failures.append("AMBuilder must not discover SchemaEntity outside the checkout")
+    if "__DATE__" in (ROOT / "vip.cpp").read_text(encoding="utf-8"):
+        failures.append("vip.cpp must not use non-reproducible date/time macros")
     if failures:
         print("VIP Core build contract failed:", *failures, sep="\n- ")
         return 1

@@ -1065,7 +1065,7 @@ const char* VIP::GetVersion()
 
 const char* VIP::GetDate()
 {
-	return __DATE__;
+	return VIP_BUILD_DATE;
 }
 
 const char *VIP::GetLogTag()
