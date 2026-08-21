@@ -8,6 +8,9 @@
 For crash diagnostics, install [Accelerator](https://github.com/komashchenko/AcceleratorLocal/releases/tag/v1.0.0) and send the generated crash file.
 
 ## Release archive
+
+See [BUILDING.md](BUILDING.md) for the supported clean Linux x86-64 build.
+
 The archive contains:
 ```text
 addons/

@@ -377,10 +377,15 @@ bool LoadVIPData()
 
 void* VIP::OnMetamodQuery(const char* iface, int* ret)
 {
-	if (!strcmp(iface, VIP_INTERFACE))
+	if (!strcmp(iface, VIP_INTERFACE_LEGACY))
 	{
 		*ret = META_IFACE_OK;
-		return g_pVIPCore;
+		return static_cast<IVIPApi001*>(g_pVIPCore);
+	}
+	if (!strcmp(iface, VIP_INTERFACE_V2))
+	{
+		*ret = META_IFACE_OK;
+		return static_cast<IVIPApi002*>(g_pVIPCore);
 	}
 
 	*ret = META_IFACE_FAILED;

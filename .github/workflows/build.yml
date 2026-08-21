@@ -14,9 +14,6 @@ permissions:
   contents: read
 
 env:
-  HL2SDK_ROOT: "${{ github.workspace }}/external"
-  MMS_PATH: "${{ github.workspace }}/external/metamod-source"
-  MANIFEST_PATH: "${{ github.workspace }}/hl2sdk-manifests"
   AMBUILD_REF: "d89ec91a7ac2607da07b50bb62346f9a10e9a998"
   MMS_REF: "2667e8e5947237c4cb7ea45cec3913ad6a44757c"
   HL2SDK_REF: "80cf8554d716a3841fe0680013cae3411a056a8d"
@@ -29,6 +26,12 @@ jobs:
     name: Build VIP Core
     if: "!contains(github.event.head_commit.message || '', '[skip ci]')"
     runs-on: ubuntu-24.04
+    env:
+      DEPS_ROOT: ${{ runner.temp }}/vip-dependencies
+      HL2SDK_ROOT: ${{ runner.temp }}/vip-dependencies/external
+      MMS_PATH: ${{ runner.temp }}/vip-dependencies/external/metamod-source
+      SCHEMA_ROOT: ${{ runner.temp }}/vip-dependencies/external/SchemaEntity
+      AMBUILD_PATH: ${{ runner.temp }}/vip-dependencies/ambuild
 
     steps:
       - name: Configure Git defaults
@@ -44,6 +47,17 @@ jobs:
 
       - name: Check build contract
         run: python .github/scripts/test_build_contract.py
+
+      - name: Check public ABI contract
+        run: python .github/scripts/test_vip_abi.py
+
+      - name: Test reproducible archive helper
+        run: python .github/scripts/test_reproducible_archive.py
+
+      - name: Compile public ABI probes
+        run: |
+          clang++-18 -std=c++17 -fsyntax-only tests/abi_legacy_probe.cpp
+          clang++-18 -std=c++17 -fsyntax-only tests/abi_v2_probe.cpp
 
       - name: Check SteamID64 persistence contract
         run: python tests/test_steamid64.py
@@ -63,18 +77,18 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
-            ambuild
-            external
+            ${{ runner.temp }}/vip-dependencies/ambuild
+            ${{ runner.temp }}/vip-dependencies/external
           key: ${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-ubuntu24.04-${{ env.AMBUILD_REF }}-${{ env.MMS_REF }}-${{ env.HL2SDK_REF }}-${{ env.SCHEMAENTITY_REF }}-${{ env.MANIFEST_REF }}
 
       - name: Prepare pinned dependencies
         if: steps.restore-dependencies.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          git clone --depth 1 --no-checkout https://github.com/alliedmodders/ambuild.git "$GITHUB_WORKSPACE/ambuild"
-          git -C "$GITHUB_WORKSPACE/ambuild" fetch --depth 1 origin "$AMBUILD_REF"
-          git -C "$GITHUB_WORKSPACE/ambuild" checkout --detach "$AMBUILD_REF"
-          mkdir -p "$GITHUB_WORKSPACE/external"
+          git clone --depth 1 --no-checkout https://github.com/alliedmodders/ambuild.git "$AMBUILD_PATH"
+          git -C "$AMBUILD_PATH" fetch --depth 1 origin "$AMBUILD_REF"
+          git -C "$AMBUILD_PATH" checkout --detach "$AMBUILD_REF"
+          mkdir -p "$HL2SDK_ROOT"
           git clone --depth 1 --no-checkout https://github.com/alliedmodders/metamod-source.git "$MMS_PATH"
           git -C "$MMS_PATH" fetch --depth 1 origin "$MMS_REF"
           git -C "$MMS_PATH" checkout --detach "$MMS_REF"
@@ -87,24 +101,20 @@ jobs:
       - name: Prepare SchemaEntity dependency
         run: |
           set -euo pipefail
-          schema_root="$GITHUB_WORKSPACE/external/SchemaEntity"
-          if [[ ! -d "$schema_root/.git" ]]; then
-            git clone --depth 1 --no-checkout https://github.com/pisex/SchemaEntity.git "$schema_root"
+          if [[ ! -d "$SCHEMA_ROOT/.git" ]]; then
+            git clone --depth 1 --no-checkout https://github.com/pisex/SchemaEntity.git "$SCHEMA_ROOT"
           fi
-          git -C "$schema_root" fetch --depth 1 origin "$SCHEMAENTITY_REF"
-          git -C "$schema_root" checkout --detach "$SCHEMAENTITY_REF"
+          git -C "$SCHEMA_ROOT" fetch --depth 1 origin "$SCHEMAENTITY_REF"
+          git -C "$SCHEMA_ROOT" checkout --detach "$SCHEMAENTITY_REF"
 
       - name: Validate pinned dependency revisions
         run: |
           set -euo pipefail
-          test "$(git -C "$GITHUB_WORKSPACE/ambuild" rev-parse HEAD)" = "$AMBUILD_REF"
+          test "$(git -C "$AMBUILD_PATH" rev-parse HEAD)" = "$AMBUILD_REF"
           test "$(git -C "$MMS_PATH" rev-parse HEAD)" = "$MMS_REF"
           test "$(git -C "$MMS_PATH/hl2sdk-manifests" rev-parse HEAD)" = "$MANIFEST_REF"
           test "$(git -C "$HL2SDK_ROOT/hl2sdk-cs2" rev-parse HEAD)" = "$HL2SDK_REF"
-          test "$(git -C "$GITHUB_WORKSPACE/external/SchemaEntity" rev-parse HEAD)" = "$SCHEMAENTITY_REF"
-          rm -f "$GITHUB_WORKSPACE/../SchemaEntity"
-          ln -s "$GITHUB_WORKSPACE/external/SchemaEntity" "$GITHUB_WORKSPACE/../SchemaEntity"
-          test -e "$GITHUB_WORKSPACE/../SchemaEntity"
+          test "$(git -C "$SCHEMA_ROOT" rev-parse HEAD)" = "$SCHEMAENTITY_REF"
 
       - name: Save pristine dependency cache
         id: save-dependencies
@@ -112,8 +122,8 @@ jobs:
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
-            ambuild
-            external
+            ${{ runner.temp }}/vip-dependencies/ambuild
+            ${{ runner.temp }}/vip-dependencies/external
           key: ${{ steps.restore-dependencies.outputs.cache-primary-key }}
 
       - name: Restore pip cache
@@ -125,9 +135,9 @@ jobs:
 
       - name: Install pinned Python dependencies
         run: |
-          python -m pip install -r .github/ci-requirements.txt
+          python -m pip install --require-hashes -r .github/ci-requirements.txt
           python .github/scripts/verify_python_toolchain.py
-          python -m pip install "$GITHUB_WORKSPACE/ambuild"
+          python -m pip install "$AMBUILD_PATH"
           python .github/scripts/verify_python_toolchain.py --check-ambuild
 
       - name: Save pip cache
@@ -141,17 +151,21 @@ jobs:
       - name: Prepare and validate SDK compatibility patches
         run: |
           set -euo pipefail
-          rm -rf "$GITHUB_WORKSPACE/hl2sdk-manifests"
-          mkdir -p "$GITHUB_WORKSPACE/hl2sdk-manifests"
-          cp -R "$MMS_PATH/hl2sdk-manifests/." "$GITHUB_WORKSPACE/hl2sdk-manifests/"
+          manifest_path="$RUNNER_TEMP/hl2sdk-manifests"
+          rm -rf "$manifest_path"
+          mkdir -p "$manifest_path"
+          cp -R "$MMS_PATH/hl2sdk-manifests/." "$manifest_path/"
           python .github/scripts/apply_sdk_compatibility_patches.py \
             --sdk-root "$HL2SDK_ROOT/hl2sdk-cs2" \
-            --manifest-path "$MANIFEST_PATH/manifests/cs2.json" \
-            --schema-root "$GITHUB_WORKSPACE/../SchemaEntity" \
+            --manifest-path "$manifest_path/manifests/cs2.json" \
+            --schema-root "$SCHEMA_ROOT" \
             --require-include public/game/server
-          test -f "$MANIFEST_PATH/SdkHelpers.ambuild"
-          test -f "$MANIFEST_PATH/manifests/cs2.json"
-          test -f "$GITHUB_WORKSPACE/../SchemaEntity/schemasystem.cpp"
+          test -f "$manifest_path/SdkHelpers.ambuild"
+          test -f "$manifest_path/manifests/cs2.json"
+          test -f "$SCHEMA_ROOT/schemasystem.cpp"
+
+      - name: Set reproducible build epoch
+        run: echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$GITHUB_SHA")" >> "$GITHUB_ENV"
 
       - name: Configure and build plugin
         env:
@@ -166,10 +180,14 @@ jobs:
             --sdks cs2 \
             --targets x86_64 \
             --enable-optimize \
-            --hl2sdk-manifests="$MANIFEST_PATH" \
+            --hl2sdk-manifests="$RUNNER_TEMP/hl2sdk-manifests" \
             --mms_path="$MMS_PATH" \
-            --hl2sdk-root="$HL2SDK_ROOT"
+            --hl2sdk-root="$HL2SDK_ROOT" \
+            --schemaentity-root="$SCHEMA_ROOT"
           ambuild
+
+      - name: Validate ELF hardening
+        run: python .github/scripts/verify_elf_hardening.py build/package/addons/vip/vip.so
 
       - name: Validate and create archive
         run: |
@@ -188,11 +206,46 @@ jobs:
           find build/package/addons -type f -printf '%P\n' | sort > "$actual_files"
           diff -u "$expected_files" "$actual_files"
           rm -f "$expected_files" "$actual_files"
-          cd build/package
-          zip -r "$GITHUB_WORKSPACE/vip.zip" addons
-          test -s "$GITHUB_WORKSPACE/vip.zip"
-          zip -T "$GITHUB_WORKSPACE/vip.zip"
-          sha256sum "$GITHUB_WORKSPACE/vip.zip"
+          python .github/scripts/create_reproducible_archive.py \
+            --root build/package \
+            --output "$RUNNER_TEMP/vip.zip" \
+            --format zip
+          test -s "$RUNNER_TEMP/vip.zip"
+          zip -T "$RUNNER_TEMP/vip.zip"
+          sha256sum "$RUNNER_TEMP/vip.zip"
+
+      - name: Rebuild independently and compare digests
+        env:
+          CC: clang-18
+          CXX: clang++-18
+        run: |
+          set -euo pipefail
+          rm -rf build-repro
+          mkdir build-repro
+          cd build-repro
+          python ../configure.py \
+            --sdks cs2 \
+            --targets x86_64 \
+            --enable-optimize \
+            --hl2sdk-manifests="$RUNNER_TEMP/hl2sdk-manifests" \
+            --mms_path="$MMS_PATH" \
+            --hl2sdk-root="$HL2SDK_ROOT" \
+            --schemaentity-root="$SCHEMA_ROOT"
+          ambuild
+          cd ..
+          python .github/scripts/verify_elf_hardening.py build-repro/package/addons/vip/vip.so
+          cmp build/package/addons/vip/vip.so build-repro/package/addons/vip/vip.so
+          python .github/scripts/create_reproducible_archive.py \
+            --root build-repro/package \
+            --output "$RUNNER_TEMP/vip-repro.zip" \
+            --format zip
+          cmp "$RUNNER_TEMP/vip.zip" "$RUNNER_TEMP/vip-repro.zip"
+          sha256sum build/package/addons/vip/vip.so "$RUNNER_TEMP/vip.zip"
+
+      - name: Verify build left checkout clean
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=all)"
 
       - name: Write cache telemetry
         if: always()
@@ -229,7 +282,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: compile
-          path: vip.zip
+          path: ${{ runner.temp }}/vip.zip
           archive: true
           if-no-files-found: error
           retention-days: 30
@@ -295,6 +348,7 @@ jobs:
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
               --title "$RELEASE_TITLE" \
               --notes "$notes" \
               --draft=false \
@@ -303,6 +357,7 @@ jobs:
             create_args=(
               "$RELEASE_TAG"
               --repo "$GITHUB_REPOSITORY"
+              --target "$GITHUB_SHA"
               --title "$RELEASE_TITLE"
               --notes "$notes"
             )

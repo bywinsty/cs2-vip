@@ -53,6 +53,9 @@ class MMSPluginConfig(object):
     self.sdk_targets = []
     self.binaries = []
     self.mms_root = mms_root
+    self.schemaentity_root = os.path.abspath(os.path.normpath(builder.options.schemaentity_root))
+    if not os.path.isfile(os.path.join(self.schemaentity_root, 'schemasystem.cpp')):
+      raise Exception('Invalid --schemaentity-root: schemasystem.cpp is missing')
     self.all_targets = []
     self.target_archs = set()
 
@@ -134,8 +137,12 @@ class MMSPluginConfig(object):
         '-Wno-switch',
         '-msse',
         '-fPIC',
-        '-frtti'
+        '-frtti',
+        '-fstack-protector-strong',
+        '-Wdate-time',
       ]
+
+      cxx.defines += ['_FORTIFY_SOURCE=3']
 
       cxx.cxxflags += ['-std=c++17']
       if (cxx.version >= 'gcc-4.0') or cxx.family == 'clang':
@@ -235,7 +242,11 @@ class MMSPluginConfig(object):
         cxx.linkflags += ['-static-libgcc']
       elif cxx.family == 'clang':
         cxx.linkflags += ['-lgcc_eh']
-      cxx.linkflags += ['-static-libstdc++']
+      cxx.linkflags += [
+        '-static-libstdc++',
+        '-Wl,-z,relro,-z,now,-z,noexecstack',
+        '-Wl,--build-id=sha1',
+      ]
     elif cxx.target.platform == 'windows':
       cxx.defines += ['WIN32', '_WINDOWS']
 

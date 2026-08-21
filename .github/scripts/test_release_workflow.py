@@ -45,7 +45,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn('gh release delete "$RELEASE_TAG"', self.release_job)
         self.assertIn('gh release view "$RELEASE_TAG"', self.release_job)
         self.assertIn("gh release edit", self.release_job)
-        self.assertNotIn('--target "$GITHUB_SHA"', self.release_job)
+        self.assertIn('--target "$GITHUB_SHA"', self.release_job)
         self.assertNotIn("--cleanup-tag", self.release_job)
         self.assertIn("IS_PRERELEASE:", self.release_job)
         self.assertIn("github.ref_name == 'dev'", self.release_job)
