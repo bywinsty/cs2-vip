@@ -26,12 +26,6 @@ jobs:
     name: Build VIP Core
     if: "!contains(github.event.head_commit.message || '', '[skip ci]')"
     runs-on: ubuntu-24.04
-    env:
-      DEPS_ROOT: ${{ runner.temp }}/vip-dependencies
-      HL2SDK_ROOT: ${{ runner.temp }}/vip-dependencies/external
-      MMS_PATH: ${{ runner.temp }}/vip-dependencies/external/metamod-source
-      SCHEMA_ROOT: ${{ runner.temp }}/vip-dependencies/external/SchemaEntity
-      AMBUILD_PATH: ${{ runner.temp }}/vip-dependencies/ambuild
 
     steps:
       - name: Configure Git defaults
@@ -41,6 +35,14 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Initialize temporary dependency paths
+        run: |
+          echo "DEPS_ROOT=$RUNNER_TEMP/vip-dependencies" >> "$GITHUB_ENV"
+          echo "HL2SDK_ROOT=$RUNNER_TEMP/vip-dependencies/external" >> "$GITHUB_ENV"
+          echo "MMS_PATH=$RUNNER_TEMP/vip-dependencies/external/metamod-source" >> "$GITHUB_ENV"
+          echo "SCHEMA_ROOT=$RUNNER_TEMP/vip-dependencies/external/SchemaEntity" >> "$GITHUB_ENV"
+          echo "AMBUILD_PATH=$RUNNER_TEMP/vip-dependencies/ambuild" >> "$GITHUB_ENV"
 
       - name: Verify LF line endings
         run: python .github/scripts/check_line_endings.py
@@ -260,7 +262,6 @@ jobs:
           PIP_CACHE_HIT: ${{ steps.restore-pip.outputs.cache-hit }}
           PIP_RESTORE_OUTCOME: ${{ steps.restore-pip.outcome }}
           PIP_CACHE_SAVE_OUTCOME: ${{ steps.save-pip.outcome }}
-          SYSTEM_SETUP_SECONDS: ${{ steps.prepare-build-tools.outputs.setup-seconds }}
           APT_UPDATED: ${{ steps.prepare-build-tools.outputs.apt-updated }}
           MISSING_APT_PACKAGES: ${{ steps.prepare-build-tools.outputs.missing-apt-packages }}
           PYTHON_VERSION: ${{ steps.prepare-build-tools.outputs.python-version }}

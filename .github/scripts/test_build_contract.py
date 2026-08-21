@@ -21,7 +21,7 @@ def main() -> int:
     for required in (
         "clang-18", "--targets x86_64", "actions/cache/restore@", "actions/cache/save@",
         "external/SchemaEntity", "update_release_tag.sh", "SDK_CACHE_MATCHED_KEY",
-        "PIP_CACHE_MATCHED_KEY", "SYSTEM_SETUP_SECONDS", "prepare-build-tools.outputs.python-version",
+        "PIP_CACHE_MATCHED_KEY", "prepare-build-tools.outputs.python-version",
         "--schemaentity-root", "SOURCE_DATE_EPOCH", "create_reproducible_archive.py",
         "verify_elf_hardening.py", "cmp build/package/addons/vip/vip.so", "--require-hashes",
         "abi_legacy_probe.cpp", "abi_v2_probe.cpp",
