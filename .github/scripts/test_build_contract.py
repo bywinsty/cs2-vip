@@ -21,9 +21,10 @@ def main() -> int:
     if "PackageScript supports exactly one target" not in package:
         failures.append("PackageScript single-target guard is missing")
     for required in (
-        "BUILD_ABI", "GLIBC_BASELINE: \"2.28\"",
+        "BUILD_ABI", "CACHE_VERSION: \"v4\"", "GLIBC_BASELINE: \"2.28\"",
         "CC: gcc", "CXX: g++", "--max-glibc \"$GLIBC_BASELINE\"",
         'safe.directory "$GITHUB_WORKSPACE"',
+        "/__w/_temp/vip-dependencies", "/__w/_temp/pip-cache",
         "--targets x86_64", "actions/cache/restore@", "actions/cache/save@",
         "external/SchemaEntity", "update_release_tag.sh", "SDK_CACHE_MATCHED_KEY",
         "PIP_CACHE_MATCHED_KEY", "prepare-build-tools.outputs.python-version",
