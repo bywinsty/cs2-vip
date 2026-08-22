@@ -15,13 +15,18 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Select bundled manylinux Python
+    - name: Select bundled manylinux toolchain
       shell: bash
       run: |
         set -euo pipefail
         python_bin=/opt/python/cp312-cp312/bin
+        toolset_root=/opt/rh/gcc-toolset-14/root/usr
         test -x "$python_bin/python"
+        test -e "$toolset_root/lib64/libstdc++.so.6"
         printf '%s\n' "$python_bin" >> "$GITHUB_PATH"
+        runtime_path="$toolset_root/lib64:$toolset_root/lib:$toolset_root/lib64/dyninst:$toolset_root/lib/dyninst"
+        if [[ -n "${LD_LIBRARY_PATH:-}" ]]; then runtime_path="$runtime_path:$LD_LIBRARY_PATH"; fi
+        printf 'LD_LIBRARY_PATH=%s\n' "$runtime_path" >> "$GITHUB_ENV"
     - name: Install missing system packages
       id: package-audit
       shell: bash

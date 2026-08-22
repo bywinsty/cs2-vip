@@ -183,6 +183,7 @@ jobs:
           test -f "$manifest_path/SdkHelpers.ambuild"
           test -f "$manifest_path/manifests/cs2.json"
           test -f "$SCHEMA_ROOT/schemasystem.cpp"
+          "$HL2SDK_ROOT/hl2sdk-cs2/devtools/bin/linux/protoc" --version | grep -Fx 'libprotoc 3.21.8'
 
       - name: Set reproducible build epoch
         run: echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$GITHUB_SHA")" >> "$GITHUB_ENV"

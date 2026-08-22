@@ -27,6 +27,7 @@ def main() -> int:
         "--targets x86_64", "actions/cache/restore@", "actions/cache/save@",
         "external/SchemaEntity", "update_release_tag.sh", "SDK_CACHE_MATCHED_KEY",
         "PIP_CACHE_MATCHED_KEY", "prepare-build-tools.outputs.python-version",
+        "libprotoc 3.21.8",
         "--schemaentity-root", "--disable-debug", "SOURCE_DATE_EPOCH", "create_reproducible_archive.py",
         "verify_elf_hardening.py", "test_verify_elf_hardening.py",
         "cmp build/package/addons/vip/vip.so", "--require-hashes",
@@ -43,6 +44,8 @@ def main() -> int:
         failures.append("both release builds must enforce the GLIBC baseline")
     if "/opt/python/cp312-cp312/bin" not in prepare_tools:
         failures.append("build tools must use the Python bundled with the manylinux image")
+    if "/opt/rh/gcc-toolset-14/root/usr" not in prepare_tools or "LD_LIBRARY_PATH" not in prepare_tools:
+        failures.append("manylinux host tools must resolve the GCC 14 runtime libraries")
     if "actions/setup-python@" in prepare_tools:
         failures.append("manylinux build must not inject a host-glibc Python runtime")
     for required in ("-fstack-protector-strong", "_FORTIFY_SOURCE=2", "-Wdate-time", "-ffile-prefix-map", "-z,relro,-z,now,-z,noexecstack"):
