@@ -44,6 +44,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - name: Prepare build tools
+        id: prepare-build-tools
+        uses: ./.github/actions/prepare-build-tools
+
       - name: Initialize temporary dependency paths
         run: |
           echo "DEPS_ROOT=$RUNNER_TEMP/vip-dependencies" >> "$GITHUB_ENV"
@@ -86,10 +90,6 @@ jobs:
 
       - name: Test branch tag helper
         run: python3 .github/scripts/test_update_release_tag.py
-
-      - name: Prepare build tools
-        id: prepare-build-tools
-        uses: ./.github/actions/prepare-build-tools
 
       - name: Restore pinned dependency cache
         id: restore-dependencies
