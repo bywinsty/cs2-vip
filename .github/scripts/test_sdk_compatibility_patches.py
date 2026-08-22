@@ -19,17 +19,28 @@ class SdkCompatibilityPatcherTests(unittest.TestCase):
             sdk / "common/network_connection.proto": "message Test {}\n",
             sdk / "public/tier1/keyvalues3.h": "if(initial_size <= NODE::DATA_SIZE)\n",
             sdk / "public/bitvec.h": "if ( this->Base()[i] != ~0 )\n",
-            sdk / "public/tier1/utlsymbollarge.h": "id >= m_MemBlocks.Count()\n",
+            sdk / "public/tier1/utlsymbollarge.h": (
+                "id >= m_MemBlocks.Count()\n"
+                "id >= m_MemBlocks.Count()\n"
+            ),
             sdk / "public/tier1/memblockallocator.h": "page_size = MAX( page_size, m_nPageSize );\n",
             sdk / "public/tier1/utlhashtable.h": "for ( int i = 0; i < data.Count(); ++i )\n",
             sdk / "public/tier1/generichash.h": "#pragma once\n",
             sdk / "public/game/server/.keep": "required include root\n",
             schema / "globaltypes.h": '#include "schemasystem.h"\n',
-            schema / "schemasystem.cpp": "NetworkStateChanged_t value;\n",
+            schema / "schemasystem.cpp": (
+                "NetworkStateChanged_t value;\n"
+                "NetworkStateChanged_t other;\n"
+                "NetworkStateChanged_t third;\n"
+                "NetworkStateChanged_t fourth;\n"
+            ),
             schema / "CCSPlayerPawn.h": "FL_PAWN_FAKECLIENT\n",
             schema / "CCSPlayerController.h": "FL_CONTROLLER_FAKECLIENT\n",
             schema / "ctimer.h": "class CTimerBase {\npublic:\n};\n",
-            schema / "module.cpp": "CMemory CModule::FindPattern(const char *pattern) {}\n",
+            schema / "module.cpp": (
+                "CMemory CModule::FindPattern(const char *pattern) {}\n"
+                "CMemory CModule::FindPattern(const char *other) {}\n"
+            ),
         }
         for path, content in files.items():
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -71,7 +82,7 @@ class SdkCompatibilityPatcherTests(unittest.TestCase):
             self.assertEqual(second.returncode, 0, second.stdout)
             self.assertEqual(after_first, self.snapshot(root))
             module = (schema / "module.cpp").read_text(encoding="utf-8")
-            self.assertEqual(module.count("__attribute__((noinline))"), 1)
+            self.assertEqual(module.count("__attribute__((noinline))"), 2)
 
     def test_missing_pattern_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -80,7 +91,7 @@ class SdkCompatibilityPatcherTests(unittest.TestCase):
             (sdk / "public/tier1/keyvalues3.h").write_text("no match\n", encoding="utf-8")
             result = self.run_patcher(sdk, schema, manifest)
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("expected exactly one original or patched", result.stdout)
+            self.assertIn("expected exactly 1 original or patched", result.stdout)
 
     def test_duplicate_pattern_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:

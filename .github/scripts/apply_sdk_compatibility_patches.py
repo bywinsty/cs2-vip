@@ -28,26 +28,28 @@ def ensure_include(path: Path) -> None:
     write(path, text.replace(source, source + patched, 1))
 
 
-def replace_or_verify(path: Path, old: str, new: str) -> None:
+def replace_or_verify(path: Path, old: str, new: str, expected_count: int = 1) -> None:
     text = path.read_text(encoding="utf-8")
     patched_count = text.count(new)
-    if patched_count == 1:
+    original_count = text.count(old)
+    if patched_count == expected_count:
         # Some patched forms intentionally contain the source pattern (for
-        # example the noinline prefix). Remove the one complete patched form
+        # example the noinline prefix). Remove every complete patched form
         # before looking for a mixed original+patched state.
-        residual = text.replace(new, "", 1)
+        residual = text.replace(new, "", expected_count)
         if old in residual:
             raise SystemExit(f"mixed original and patched compatibility patterns in {path}: {old}")
         return
-    if patched_count > 1:
+    if patched_count and original_count:
+        raise SystemExit(f"mixed original and patched compatibility patterns in {path}: {old}")
+    if patched_count > expected_count:
         raise SystemExit(f"duplicate patched compatibility pattern in {path}: {new}")
-    original_count = text.count(old)
-    if original_count != 1:
+    if original_count != expected_count:
         raise SystemExit(
-            f"expected exactly one original or patched compatibility pattern in {path}: "
+            f"expected exactly {expected_count} original or patched compatibility patterns in {path}: "
             f"original={original_count}, patched={patched_count}"
         )
-    write(path, text.replace(old, new, 1))
+    write(path, text.replace(old, new, expected_count))
 
 
 def ensure_timer_destructor(path: Path) -> None:
@@ -66,7 +68,7 @@ def ensure_timer_destructor(path: Path) -> None:
     write(path, text.replace(declaration, declaration + destructor, 1))
 
 
-def ensure_noinline_pattern_scan(path: Path) -> None:
+def ensure_noinline_pattern_scan(path: Path, expected_count: int = 1) -> None:
     old = "CMemory CModule::FindPattern("
     new = (
         "#if defined(__GNUC__) && !defined(__clang__)\n"
@@ -74,7 +76,7 @@ def ensure_noinline_pattern_scan(path: Path) -> None:
         "#endif\n"
         "CMemory CModule::FindPattern("
     )
-    replace_or_verify(path, old, new)
+    replace_or_verify(path, old, new, expected_count=expected_count)
 
 
 def patch_gcc14_signedness(sdk_root: Path) -> None:
@@ -92,6 +94,7 @@ def patch_gcc14_signedness(sdk_root: Path) -> None:
         sdk_root / "public" / "tier1" / "utlsymbollarge.h",
         "id >= m_MemBlocks.Count()",
         "id >= static_cast<UtlSymLargeId_t>(m_MemBlocks.Count())",
+        expected_count=2,
     )
     replace_or_verify(
         sdk_root / "public" / "tier1" / "memblockallocator.h",
@@ -143,11 +146,16 @@ def main() -> int:
     patch_gcc14_signedness(sdk_root)
     schema = args.schema_root
     ensure_include(schema / "globaltypes.h")
-    replace_or_verify(schema / "schemasystem.cpp", "NetworkStateChanged_t", "NetworkStateChangedData")
+    replace_or_verify(
+        schema / "schemasystem.cpp",
+        "NetworkStateChanged_t",
+        "NetworkStateChangedData",
+        expected_count=4,
+    )
     replace_or_verify(schema / "CCSPlayerPawn.h", "FL_PAWN_FAKECLIENT", "FL_BOT")
     replace_or_verify(schema / "CCSPlayerController.h", "FL_CONTROLLER_FAKECLIENT", "FL_FAKECLIENT")
     ensure_timer_destructor(schema / "ctimer.h")
-    ensure_noinline_pattern_scan(schema / "module.cpp")
+    ensure_noinline_pattern_scan(schema / "module.cpp", expected_count=2)
     if not (sdk_root / "public" / "tier1" / "generichash.h").is_file():
         raise SystemExit("pinned SDK is missing public/tier1/generichash.h")
     if (sdk_root / "tier1" / "generichash.cpp").exists():
