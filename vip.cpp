@@ -213,6 +213,8 @@ CON_COMMAND_F(mm_reload_vip, "check player vip", FCVAR_NONE)
 		bool bFound = false;
 		CCSPlayerController* pController;
 		int iSlot = 0;
+		const bool bNumericTarget = containsOnlyDigits(args[1]);
+		const uint64 iNumericTarget = bNumericTarget ? std::stoull(args[1]) : 0;
 		for (int i = 0; i < 64; i++)
 		{
 			pController = CCSPlayerController::FromSlot(i);
@@ -221,7 +223,7 @@ CON_COMMAND_F(mm_reload_vip, "check player vip", FCVAR_NONE)
 			uint64 m_steamID = pController->m_steamID();
 			if(m_steamID == 0)
 				continue;
-			if(strstr(pController->m_iszPlayerName(), args[1]) || (containsOnlyDigits(args[1]) && m_steamID == std::stoll(args[1])) || (containsOnlyDigits(args[1]) && std::stoll(args[1]) == i) || (containsOnlyDigits(args[1]) && std::stoll(args[1]) == engine->GetClientXUID(i)))
+			if(strstr(pController->m_iszPlayerName(), args[1]) || (bNumericTarget && (m_steamID == iNumericTarget || iNumericTarget == static_cast<uint64>(i) || iNumericTarget == engine->GetClientXUID(i))))
 			{
 				bFound = true;
 				iSlot = i;
@@ -281,6 +283,8 @@ CON_COMMAND_F(vip_remove, "remove player vip", FCVAR_NONE)
 	{
 		bool bFound = false;
 		int iSlot = 0; 
+		const bool bNumericTarget = containsOnlyDigits(args[1]);
+		const uint64 iNumericTarget = bNumericTarget ? std::stoull(args[1]) : 0;
 		for (int i = 0; i < 64; i++)
 		{
 			CCSPlayerController* pController = CCSPlayerController::FromSlot(i);
@@ -289,7 +293,7 @@ CON_COMMAND_F(vip_remove, "remove player vip", FCVAR_NONE)
 			uint64 m_steamID = pController->m_steamID();
 			if(m_steamID == 0)
 				continue;
-			if(strstr(pController->m_iszPlayerName(), args[1]) || (containsOnlyDigits(args[1]) && m_steamID == std::stoll(args[1])) || (containsOnlyDigits(args[1]) && std::stoll(args[1]) == i))
+			if(strstr(pController->m_iszPlayerName(), args[1]) || (bNumericTarget && (m_steamID == iNumericTarget || iNumericTarget == static_cast<uint64>(i))))
 			{
 				bFound = true;
 				iSlot = i;
@@ -317,6 +321,8 @@ CON_COMMAND_F(vip_give, "give player vip", FCVAR_NONE)
 	{
 		bool bFound = false;
 		int iSlot = 0;
+		const bool bNumericTarget = containsOnlyDigits(args[1]);
+		const uint64 iNumericTarget = bNumericTarget ? std::stoull(args[1]) : 0;
 		for (int i = 0; i < 64; i++)
 		{
 			CCSPlayerController* pController = CCSPlayerController::FromSlot(i);
@@ -328,7 +334,7 @@ CON_COMMAND_F(vip_give, "give player vip", FCVAR_NONE)
 
 			if(!pController->GetPlayerPawn() || !pController->m_hPawn())
 				continue;
-			if(strstr(pController->m_iszPlayerName(), args[1]) || (containsOnlyDigits(args[1]) && m_steamID == std::stoll(args[1])) || (containsOnlyDigits(args[1]) && std::stoll(args[1]) == i))
+			if(strstr(pController->m_iszPlayerName(), args[1]) || (bNumericTarget && (m_steamID == iNumericTarget || iNumericTarget == static_cast<uint64>(i))))
 			{
 				bFound = true;
 				iSlot = i;
