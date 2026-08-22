@@ -11,6 +11,7 @@
 #include "vip.h"
 #include "include/vip_database_migration.h"
 #include "metamod_oslink.h"
+#include "filesystem.h"
 #include "schemasystem/schemasystem.h"
 
 #ifndef VIP_BUILD_COMMIT
@@ -136,7 +137,11 @@ bool ParseNumericArgument(const char *value, uint64 &result)
 {
 	if (!value)
 		return false;
-	return vip_database::ParseUnsignedDecimal(std::string_view(value), result);
+	std::uint64_t parsed = 0;
+	if (!vip_database::ParseUnsignedDecimal(std::string_view(value), parsed))
+		return false;
+	result = static_cast<uint64>(parsed);
+	return true;
 }
 
 void LoadAuthorizedClient(int iSlot, uint64 steamID);
@@ -768,7 +773,7 @@ CON_COMMAND_F(vip_give, "give player vip", FCVAR_NONE)
 		}
 		else if(std::strlen(args[1]) >= 9 && std::strlen(args[1]) <= 20)
 		{
-			uint64 accountID = 0;
+			std::uint64_t accountID = 0;
 			if (!vip_database::ParseAccountIdentifier(std::string_view(args[1]), accountID))
 			{
 				META_CONPRINT("[VIP] Invalid account ID\n");
