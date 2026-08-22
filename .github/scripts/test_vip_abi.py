@@ -52,7 +52,7 @@ class VipAbiContractTests(unittest.TestCase):
             '"bigint unsigned"',
             "VIP_BUILD_COMMIT",
             "g_pFullFileSystem->RenameFile",
-            "runtime-probe/v1",
+            "runtime-probe/v2",
         ):
             self.assertIn(required, self.factory)
 

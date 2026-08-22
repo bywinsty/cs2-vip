@@ -27,7 +27,7 @@ jobs:
   validation:
     name: Validate on protected CSHOST test server
     if: github.ref_name == 'Core'
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, cshost-runtime, ephemeral]
     environment: cshost-runtime-test
     permissions:
       actions: read
@@ -44,6 +44,8 @@ jobs:
       CSHOST_FTP_PASSWORD: ${{ secrets.CSHOST_FTP_PASSWORD }}
       CSHOST_FTP_ROOT: ${{ secrets.CSHOST_FTP_ROOT }}
       CSHOST_SENTINEL_SHA256: ${{ secrets.CSHOST_SENTINEL_SHA256 }}
+      CSHOST_RUNTIME_NETWORK_PREFLIGHT: passed
+      CSHOST_RUNNER_POLICY_ID: cshost-runtime-ephemeral-v1
 
     steps:
       - name: Checkout current Core
@@ -57,6 +59,10 @@ jobs:
           set -euo pipefail
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
           test "$GITHUB_REF" = refs/heads/Core
+          test "${RUNNER_ENVIRONMENT:-}" = self-hosted
+          test -n "${RUNNER_NAME:-}"
+          test "$CSHOST_RUNTIME_NETWORK_PREFLIGHT" = passed
+          test "$CSHOST_RUNNER_POLICY_ID" = cshost-runtime-ephemeral-v1
           core_tip="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/Core" --jq '.object.sha')"
           test "$GITHUB_SHA" = "$core_tip"
           environment_json="$(gh api "repos/$GITHUB_REPOSITORY/environments/cshost-runtime-test")"
@@ -129,7 +135,7 @@ jobs:
             --mode "$VALIDATION_MODE"
             --repository "$GITHUB_REPOSITORY"
             --validation-run-id "$GITHUB_RUN_ID"
-            --report runtime-validation-output/runtime-validation-v3.json
+            --report runtime-validation-output/runtime-validation-v4.json
             --api-base "$CSHOST_API_BASE"
             --api-token "$CSHOST_API_TOKEN"
             --ftp-host "$CSHOST_FTP_HOST"
@@ -137,7 +143,10 @@ jobs:
             --ftp-user "$CSHOST_FTP_USER"
             --ftp-password "$CSHOST_FTP_PASSWORD"
             --ftp-root "${CSHOST_FTP_ROOT:-.}"
-            --sentinel-sha256 "$CSHOST_SENTINEL_SHA256")
+            --sentinel-sha256 "$CSHOST_SENTINEL_SHA256"
+            --transport legacy-ftp
+            --runner-policy-id "$CSHOST_RUNNER_POLICY_ID"
+            --runner-name "${RUNNER_NAME:-unknown}")
           if [[ "$VALIDATION_MODE" = validate ]]; then
             command+=(--artifact-dir candidate --expected-commit "$GITHUB_SHA" --build-run-id "$BUILD_RUN_ID")
           fi
@@ -151,7 +160,7 @@ jobs:
           unzip -p candidate/vip.zip addons/vip/vip.so > runtime-validation-output/vip.so
           binary_sha="$(sha256sum runtime-validation-output/vip.so | cut -d' ' -f1)"
           python3 .github/scripts/verify_runtime_validation.py \
-            --report runtime-validation-output/runtime-validation-v3.json \
+            --report runtime-validation-output/runtime-validation-v4.json \
             --expected-commit "$GITHUB_SHA" \
             --expected-build-run-id "$BUILD_RUN_ID" \
             --archive-sha256 "$archive_sha" \
@@ -166,7 +175,7 @@ jobs:
           name: runtime-validation-result
           path: |
             runtime-validation-output/vip.zip
-            runtime-validation-output/runtime-validation-v3.json
+            runtime-validation-output/runtime-validation-v4.json
           if-no-files-found: error
           retention-days: 2
 
@@ -175,7 +184,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: runtime-validation-report-${{ github.run_id }}
-          path: runtime-validation-output/runtime-validation-v3.json
+          path: runtime-validation-output/runtime-validation-v4.json
           if-no-files-found: warn
           retention-days: 7
 
@@ -212,7 +221,7 @@ jobs:
           unzip -p validated/vip.zip addons/vip/vip.so > validated/vip.so
           binary_sha="$(sha256sum validated/vip.so | cut -d' ' -f1)"
           python3 .github/scripts/verify_runtime_validation.py \
-            --report validated/runtime-validation-v3.json \
+            --report validated/runtime-validation-v4.json \
             --expected-commit "$GITHUB_SHA" \
             --expected-build-run-id "$BUILD_RUN_ID" \
             --archive-sha256 "$archive_sha" \
@@ -224,5 +233,5 @@ jobs:
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:
           subject-path: validated/vip.zip
-          predicate-type: https://github.com/bywinsty/cs2-vip/runtime-validation/v3
-          predicate-path: validated/runtime-validation-v3.json
+          predicate-type: https://github.com/bywinsty/cs2-vip/runtime-validation/v4
+          predicate-path: validated/runtime-validation-v4.json

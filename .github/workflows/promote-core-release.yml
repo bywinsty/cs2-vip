@@ -83,7 +83,7 @@ jobs:
           binary_sha="$(sha256sum release-files/vip.so | cut -d' ' -f1)"
           gh attestation verify release-files/vip.zip \
             --repo "$GITHUB_REPOSITORY" \
-            --predicate-type https://github.com/bywinsty/cs2-vip/runtime-validation/v3 \
+            --predicate-type https://github.com/bywinsty/cs2-vip/runtime-validation/v4 \
             --signer-workflow bywinsty/cs2-vip/.github/workflows/cshost-runtime-validation.yml \
             --signer-digest "$GITHUB_SHA" \
             --source-ref refs/heads/Core \
@@ -96,7 +96,7 @@ jobs:
             --archive-sha256 "$archive_sha" \
             --binary-sha256 "$binary_sha" \
             --max-age-hours 24 \
-            --output-predicate release-files/runtime-validation-v3.json
+            --output-predicate release-files/runtime-validation-v4.json
           rm release-files/vip.so release-files/runtime-attestation.json
 
       - name: Move verified Core tag
@@ -104,8 +104,8 @@ jobs:
 
       - name: Create or update stable release
         run: |
-          validation_run_id="$(jq -r '.validation_run_id' release-files/runtime-validation-v3.json)"
-          validated_at="$(jq -r '.completed_at' release-files/runtime-validation-v3.json)"
+          validation_run_id="$(jq -r '.validation_run_id' release-files/runtime-validation-v4.json)"
+          validated_at="$(jq -r '.completed_at' release-files/runtime-validation-v4.json)"
           notes=$'Manually promoted verified Core release.\n\nCommit: '"$GITHUB_SHA"$'\nBuild run: https://github.com/'"$GITHUB_REPOSITORY"'/actions/runs/'"$BUILD_RUN_ID"$'\nRuntime validation: https://github.com/'"$GITHUB_REPOSITORY"'/actions/runs/'"$validation_run_id"$'\nValidated at: '"$validated_at"
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for runtime-validation-v3 promotion policy."""
+"""Tests for runtime-validation-v4 promotion policy."""
 
 from __future__ import annotations
 
@@ -35,9 +35,14 @@ def report() -> dict:
         "validation_run_id": "456",
         "nonce": "e" * 32,
         "stage_id": "f" * 64,
+        "stage_identity": {"stage_id": "f" * 64},
         "generated_at": "2026-08-22T11:55:00Z",
         "completed_at": "2026-08-22T11:59:00Z",
         "result": "success",
+        "transport": "legacy-ftp",
+        "runner_policy_id": "cshost-runtime-ephemeral-v1",
+        "runner_name": "runner-1",
+        "network_preflight": {"status": "passed", "policy_id": "cshost-runtime-ephemeral-v1"},
         "artifact": {"archive_sha256": ARCHIVE, "binary_sha256": BINARY},
         "rollback": {
             "result": "success",
@@ -47,6 +52,7 @@ def report() -> dict:
         "stages": [{"name": name, "status": "success"} for name in verify.REQUIRED_STAGES],
         "probe": {
             "nonce": "e" * 32,
+            "stage_id": "f" * 64,
             "build_commit": COMMIT,
             "ready": True,
             "interfaces": {"IVIPApi001": True, "IVIPApi002": True},
@@ -70,6 +76,10 @@ def expected() -> dict:
 
 
 class RuntimeValidationPolicyTests(unittest.TestCase):
+    def test_empty_attestation_set_is_rejected(self):
+        with self.assertRaisesRegex(verify.VerificationError, "at least one"):
+            verify.verify_attestation([], **expected())
+
     def test_valid_report_and_attestation(self):
         predicate = report()
         self.assertEqual(verify.verify_report(predicate, **expected()), predicate)
@@ -129,6 +139,35 @@ class RuntimeValidationPolicyTests(unittest.TestCase):
         entry["verificationResult"]["statement"]["subject"][0]["digest"]["sha256"] = "0" * 64
         with self.assertRaises(verify.VerificationError):
             verify.verify_attestation([entry], **expected())
+
+    def test_duplicate_attestations_are_deduplicated_and_latest_is_selected(self):
+        predicate = report()
+        newer = copy.deepcopy(predicate)
+        newer["validation_run_id"] = "457"
+        newer["completed_at"] = "2026-08-22T11:59:30Z"
+        def entry(value):
+            return {"verificationResult": {"statement": {
+                "predicateType": verify.PREDICATE_TYPE,
+                "subject": [{"name": "validated/vip.zip", "digest": {"sha256": ARCHIVE}}],
+                "predicate": value,
+            }}}
+        self.assertEqual(verify.verify_attestation([entry(predicate), entry(predicate), entry(newer)], **expected()), newer)
+
+    def test_conflicting_valid_attestations_are_rejected(self):
+        first = report()
+        second = copy.deepcopy(first)
+        second["stage_id"] = "1" * 64
+        second["stage_identity"]["stage_id"] = "1" * 64
+        second["probe"]["stage_id"] = "1" * 64
+        values = []
+        for value in (first, second):
+            values.append({"verificationResult": {"statement": {
+                "predicateType": verify.PREDICATE_TYPE,
+                "subject": [{"name": "validated/vip.zip", "digest": {"sha256": ARCHIVE}}],
+                "predicate": value,
+            }}})
+        with self.assertRaisesRegex(verify.VerificationError, "conflicting"):
+            verify.verify_attestation(values, **expected())
 
 
 if __name__ == "__main__":

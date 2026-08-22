@@ -105,12 +105,12 @@
     {
       "capability": "cs2-runtime",
       "name": "Counter-Strike 2 dedicated server",
-      "version": "runtime-validation-v3.cs2_build",
+      "version": "runtime-validation-v4.cs2_build",
       "download_location": "https://store.steampowered.com/app/730/CounterStrike_2/",
-      "purpose": "Game runtime; the exact deployed build is bound by runtime-validation-v3 evidence",
+      "purpose": "Game runtime; the exact deployed build is bound by runtime-validation-v4 evidence",
       "required": true,
       "relationships": ["RUNTIME_DEPENDENCY_OF"],
-      "version_evidence": "runtime-validation-v3.json#/cs2_build"
+      "version_evidence": "runtime-validation-v4.json#/cs2_build"
     },
     {
       "capability": "utils-provider",

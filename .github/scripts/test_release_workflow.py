@@ -64,7 +64,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "--name compile",
             "update_release_tag.sh",
             "gh release download",
-            "runtime-validation/v3",
+            "runtime-validation/v4",
             "--signer-workflow bywinsty/cs2-vip/.github/workflows/cshost-runtime-validation.yml",
             "--source-ref refs/heads/Core",
             '--source-digest "$GITHUB_SHA"',
@@ -88,12 +88,13 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("attestations: write", validation)
         self.assertIn("CSHOST_API_TOKEN", validation)
         self.assertIn("CSHOST_FTP_PASSWORD", validation)
+        self.assertIn("self-hosted, cshost-runtime, ephemeral", validation)
         self.assertIn("id-token: write", attestation)
         self.assertIn("attestations: write", attestation)
         self.assertNotIn("CSHOST_API_TOKEN", attestation)
         self.assertNotIn("CSHOST_FTP_PASSWORD", attestation)
-        self.assertIn("predicate-path: validated/runtime-validation-v3.json", attestation)
-        self.assertIn("predicate-type: https://github.com/bywinsty/cs2-vip/runtime-validation/v3", attestation)
+        self.assertIn("predicate-path: validated/runtime-validation-v4.json", attestation)
+        self.assertIn("predicate-type: https://github.com/bywinsty/cs2-vip/runtime-validation/v4", attestation)
 
     def test_cshost_workflow_is_manual_core_only_and_supports_recovery(self):
         self.assertIn("workflow_dispatch:", self.cshost)

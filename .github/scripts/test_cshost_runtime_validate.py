@@ -63,6 +63,9 @@ class FakeFTP:
     def rename(self, source: str, destination: str) -> None:
         self.files[destination] = self.files.pop(source)
 
+    def upload_atomic(self, path: str, payload: bytes) -> None:
+        self.files[path] = payload
+
     def delete(self, path: str, *, missing_ok: bool = False) -> None:
         if path not in self.files and not missing_ok:
             raise runtime.ValidationError(f"missing {path}")
@@ -76,6 +79,9 @@ class FakeAPI:
     def is_online(self) -> bool:
         return self.online
 
+    def assert_stage_identity(self, expected: str) -> dict:
+        return {"stage_id": expected}
+
     def start(self, _timeout: int) -> None:
         self.online = True
 
@@ -84,6 +90,13 @@ class FakeAPI:
 
 
 class CshostRuntimeTests(unittest.TestCase):
+    def test_api_stage_identity_is_hash_pinned(self):
+        api = object.__new__(runtime.CshostAPI)
+        api.status = lambda: {"status": "ok", "stage_id": "f" * 64}
+        self.assertEqual(api.assert_stage_identity("f" * 64), {"stage_id": "f" * 64})
+        with self.assertRaisesRegex(runtime.ValidationError, "stage identity"):
+            api.assert_stage_identity("e" * 64)
+
     def test_sentinel_is_hash_pinned_and_non_production(self):
         payload, digest = encoded_sentinel()
         config = runtime.load_sentinel(payload, digest)
@@ -127,16 +140,17 @@ class CshostRuntimeTests(unittest.TestCase):
         probe = {
             "schema": runtime.PROBE_SCHEMA,
             "nonce": nonce,
+            "stage_id": "f" * 64,
             "build_commit": COMMIT,
             "version": "1.2.3.1",
             "interfaces": {"IVIPApi001": True, "IVIPApi002": True},
             "ready": True,
             "migration": {"status": "ready", "account_id_type": "bigint unsigned"},
         }
-        self.assertEqual(runtime.validate_probe(probe, nonce, COMMIT), probe)
+        self.assertEqual(runtime.validate_probe(probe, nonce, COMMIT, "f" * 64), probe)
         probe["migration"]["account_id_type"] = "bigint"
         with self.assertRaises(runtime.ValidationError):
-            runtime.validate_probe(probe, nonce, COMMIT)
+            runtime.validate_probe(probe, nonce, COMMIT, "f" * 64)
 
     def test_journal_restore_recovers_binary_and_original_state(self):
         original = b"original"
@@ -167,10 +181,32 @@ class CshostRuntimeTests(unittest.TestCase):
     def test_transport_contract_is_plain_ftp_and_fixed_public_paths(self):
         source = Path(runtime.__file__).read_text(encoding="utf-8")
         self.assertIn("ftplib.FTP()", source)
-        self.assertNotIn("FTP_TLS", source)
+        self.assertIn("class Transport", source)
+        self.assertIn("LegacyFTPTransport = FTPTransport", source)
         self.assertIn('PLUGIN_PATH = "addons/vip/vip.so"', source)
         self.assertIn('EVIDENCE_DIRECTORY = "addons/data"', source)
         self.assertNotIn("databases.cfg\")", source)
+
+    def test_missing_or_corrupt_backup_never_deletes_candidate(self):
+        original = b"original"
+        candidate = b"candidate"
+        journal = {
+            "schema": runtime.JOURNAL_SCHEMA,
+            "plugin_path": runtime.PLUGIN_PATH,
+            "backup_path": ".vip-ci/backups/vip.so.1.abc",
+            "original_sha256": hashlib.sha256(original).hexdigest(),
+            "candidate_sha256": hashlib.sha256(candidate).hexdigest(),
+            "original_online": False,
+        }
+        api = FakeAPI(False)
+        for files in (
+            {runtime.PLUGIN_PATH: candidate},
+            {runtime.PLUGIN_PATH: candidate, journal["backup_path"]: b"tampered"},
+        ):
+            ftp = FakeFTP(files)
+            with self.assertRaises(runtime.ValidationError):
+                runtime.restore_from_journal(api, ftp, {}, journal)
+            self.assertEqual(ftp.files.get(runtime.PLUGIN_PATH), candidate)
 
 
 if __name__ == "__main__":

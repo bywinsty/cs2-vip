@@ -40,5 +40,11 @@ int main()
     assert(plan.warnUnmapped.find("`account_id` > 76561202255233023") != std::string::npos);
     assert(plan.finalizeUnsignedColumn.find("BIGINT UNSIGNED") != std::string::npos);
     assert(plan.recordVersion.find("steamid64-v2") != std::string::npos);
+    assert(plan.recordVersion.find("INSERT IGNORE") != std::string::npos);
+    assert(plan.verifyVersion.find("COUNT(*)") != std::string::npos);
+    assert(plan.lockQuery.find("SHA2") != std::string::npos);
+    assert(plan.steps.size() >= 15);
+    assert(plan.steps.front().name == "acquire-lock");
+    assert(plan.steps.back().name == "release-lock");
     return 0;
 }

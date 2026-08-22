@@ -23,8 +23,9 @@ these environment secrets:
 Use a separate FTP account restricted to the test-server root. The account
 needs access only to the public plugin binary, `.vip-ci` journal/backups and
 `addons/data/vip-runtime-validation-*.json`. Do not grant access to unrelated
-servers. GitHub-hosted runners use plain FTP because that is the provider
-interface assumed by this workflow; therefore never transfer database dumps,
+servers. The protected validation job uses the dedicated ephemeral
+self-hosted runner; plain FTP is permitted only inside its isolated network
+policy. Therefore never transfer database dumps,
 `databases.cfg`, other configuration, tokens or personal data through it.
 
 The validation job receives the CSHOST environment secrets but has no
@@ -34,12 +35,14 @@ is the only job allowed to create the custom attestation.
 ## Test-server sentinel
 
 Copy `.github/cshost-runtime-sentinel.example.json`, replace every placeholder,
-and upload the result as `.vip-ci/runtime-sentinel-v3.json` relative to
+and upload the result as `.vip-ci/runtime-sentinel-v4.json` relative to
 `CSHOST_FTP_ROOT`. Keep these invariants:
 
 - `purpose` is exactly `vip-ci-test-server` and `production` is `false`;
 - `stage_id` is SHA-256 of an opaque, stable test-stage identifier, not a host,
   customer or account name;
+- the HTTPS `status` response must contain the same `stage_id` and the runtime
+  probe must echo it;
 - `plugin_path` and `evidence_directory` remain fixed;
 - A2S points to the same test server;
 - required capabilities are Metamod, Utils, Menus, Players, SQLMM; Cookies is
@@ -80,12 +83,17 @@ restored SHA-256, removes evidence, and only then permits attestation.
 
 ## Recovery
 
-Never delete `.vip-ci/runtime-overlay-journal-v3.json` or its referenced backup
+Never delete `.vip-ci/runtime-overlay-journal-v4.json` or its referenced backup
 manually. Every new run first restores an unfinished journal. If a normal run
 cannot complete, dispatch the workflow on `Core` with mode `restore-only`; no
 build run ID is required. It restores only when the currently installed binary
 matches either the recorded original or candidate digest. An unknown binary is
 left untouched and requires manual investigation.
+
+The validation job runs only on the dedicated ephemeral runner labels
+`self-hosted,cshost-runtime,ephemeral`. Plain FTP is accepted only inside the
+runner's documented private network policy; it is not a cryptographic trust
+boundary.
 
 After recovery, verify the server state and original `vip.so` SHA-256 from the
 diagnostic report before starting another validation.

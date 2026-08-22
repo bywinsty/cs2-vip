@@ -1,5 +1,5 @@
 {
-  "schema": "https://github.com/bywinsty/cs2-vip/cshost-runtime-sentinel/v3",
+  "schema": "https://github.com/bywinsty/cs2-vip/cshost-runtime-sentinel/v4",
   "purpose": "vip-ci-test-server",
   "production": false,
   "stage_id": "REPLACE_ME_WITH_SHA256_OF_AN_OPAQUE_STAGE_IDENTIFIER",

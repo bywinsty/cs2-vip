@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify runtime-validation-v3 reports and GitHub CLI attestation JSON."""
+"""Verify runtime-validation-v4 reports and GitHub CLI attestation JSON."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path, PurePosixPath
 import re
 
 
-REPORT_SCHEMA = "https://github.com/bywinsty/cs2-vip/runtime-validation/v3"
+REPORT_SCHEMA = "https://github.com/bywinsty/cs2-vip/runtime-validation/v4"
 PREDICATE_TYPE = REPORT_SCHEMA
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
@@ -20,6 +20,7 @@ REQUIRED_STAGES = frozenset({
     "backup-original", "install-candidate", "start-candidate", "a2s", "runtime-probe", "rollback",
 })
 REQUIRED_CAPABILITIES = frozenset({"metamod", "utils", "menus", "players", "sqlmm"})
+RUNNER_POLICY_ID = "cshost-runtime-ephemeral-v1"
 
 
 class VerificationError(ValueError):
@@ -55,7 +56,7 @@ def verify_report(
     now: dt.datetime | None = None,
 ) -> dict:
     if not isinstance(report, dict) or report.get("schema") != REPORT_SCHEMA:
-        raise VerificationError("runtime report schema is not v3")
+        raise VerificationError("runtime report schema is not v4")
     if report.get("repository") != "bywinsty/cs2-vip":
         raise VerificationError("runtime report repository mismatch")
     if report.get("commit") != expected_commit or str(report.get("build_run_id")) != expected_build_run_id:
@@ -64,13 +65,27 @@ def verify_report(
         raise VerificationError("runtime report validation run ID is missing")
     if report.get("result") != "success":
         raise VerificationError("runtime report result is not success")
+    if report.get("transport") != "legacy-ftp":
+        raise VerificationError("runtime report transport is not legacy-ftp")
+    if report.get("runner_policy_id") != RUNNER_POLICY_ID:
+        raise VerificationError("runtime report runner policy is not the approved ephemeral policy")
+    if not isinstance(report.get("runner_name"), str) or not report["runner_name"] or report["runner_name"] == "unknown":
+        raise VerificationError("runtime report runner identity is missing")
+    network = report.get("network_preflight")
+    if (not isinstance(network, dict) or network.get("status") != "passed"
+            or network.get("policy_id") != RUNNER_POLICY_ID):
+        raise VerificationError("runtime runner network preflight did not pass")
     artifact = report.get("artifact")
     if not isinstance(artifact, dict) or artifact.get("archive_sha256") != archive_sha256:
         raise VerificationError("runtime report archive SHA-256 mismatch")
     if artifact.get("binary_sha256") != binary_sha256:
         raise VerificationError("runtime report binary SHA-256 mismatch")
-    if not isinstance(report.get("stage_id"), str) or not SHA256_RE.fullmatch(report["stage_id"]):
+    if (not isinstance(report.get("stage_id"), str) or not SHA256_RE.fullmatch(report["stage_id"])
+            or report["stage_id"] == "0" * 64):
         raise VerificationError("runtime report stage identifier is not anonymized")
+    identity = report.get("stage_identity")
+    if not isinstance(identity, dict) or identity.get("stage_id") != report["stage_id"]:
+        raise VerificationError("runtime report stage identity is not bound to the sentinel")
     rollback = report.get("rollback")
     if not isinstance(rollback, dict) or rollback.get("result") != "success":
         raise VerificationError("runtime rollback result is not success")
@@ -93,6 +108,8 @@ def verify_report(
         raise VerificationError("runtime report nonce is invalid")
     if probe.get("nonce") != report["nonce"]:
         raise VerificationError("runtime probe nonce is not bound to the report")
+    if probe.get("stage_id") != report.get("stage_id") or probe.get("stage_id") == "0" * 64:
+        raise VerificationError("runtime probe stage identity is not bound to the report")
     interfaces = probe.get("interfaces")
     if not isinstance(interfaces, dict) or interfaces.get("IVIPApi001") is not True or interfaces.get("IVIPApi002") is not True:
         raise VerificationError("runtime probe did not prove both VIP ABI factories")
@@ -166,9 +183,32 @@ def verify_attestation(value: object, **expected: object) -> dict:
             valid.append(verify_report(statement.get("predicate"), **expected))
         except VerificationError as exc:
             errors.append(str(exc))
-    if len(valid) != 1:
-        raise VerificationError(f"expected exactly one valid runtime attestation, got {len(valid)}: {errors}")
-    return valid[0]
+    if not valid:
+        raise VerificationError(f"expected at least one valid runtime attestation, got 0: {errors}")
+
+    # Exact duplicate predicates are harmless (GitHub may return one entry per
+    # verification record).  Conflicting valid predicates are not.
+    unique: dict[str, dict] = {
+        json.dumps(item, sort_keys=True, separators=(",", ":")): item for item in valid
+    }
+    candidates = list(unique.values())
+    identity = {
+        json.dumps({
+            "commit": item.get("commit"),
+            "build_run_id": str(item.get("build_run_id")),
+            "archive": item.get("artifact", {}).get("archive_sha256"),
+            "binary": item.get("artifact", {}).get("binary_sha256"),
+            "stage_id": item.get("stage_id"),
+        }, sort_keys=True, separators=(",", ":"))
+        for item in candidates
+    }
+    if len(identity) != 1:
+        raise VerificationError("runtime attestations contain conflicting predicates")
+    return max(
+        candidates,
+        key=lambda item: (parse_timestamp(item["completed_at"], "completed_at"),
+                          int(str(item["validation_run_id"]))),
+    )
 
 
 def parse_args() -> argparse.Namespace:

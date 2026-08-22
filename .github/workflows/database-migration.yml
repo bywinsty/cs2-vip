@@ -29,6 +29,10 @@ jobs:
           g++ -std=c++17 -Wall -Wextra -Werror -Iinclude \
             tests/test_database_migration.cpp -o migration-helper-test
           ./migration-helper-test
+          g++ -std=c++17 -Wall -Wextra -Werror -Iinclude \
+            tests/migration_plan_emitter.cpp -o migration-plan-emitter
+          ./migration-plan-emitter > migration-plan.json
+          python -c "import json; p=json.load(open('migration-plan.json')); assert p['ordered_steps'][0]['name']=='acquire-lock'"
 
   database:
     name: ${{ matrix.name }}
@@ -66,6 +70,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes mariadb-client
+      - name: Compile production migration plan emitter
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -Wall -Wextra -Werror -Iinclude \
+            tests/migration_plan_emitter.cpp -o "$RUNNER_TEMP/migration-plan-emitter"
+          echo "MIGRATION_PLAN_EMITTER=$RUNNER_TEMP/migration-plan-emitter" >> "$GITHUB_ENV"
       - name: Wait for database service
         env:
           MYSQL_PWD: root
@@ -79,6 +89,8 @@ jobs:
           done
           exit 1
       - name: Run migration compatibility cases
+        env:
+          MIGRATION_FAULT_INJECTION: "1"
         run: |
           python .github/scripts/test_database_migration.py \
             --host 127.0.0.1 --port 3306 --user root --password root --database vip_test

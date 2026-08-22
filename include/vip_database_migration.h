@@ -15,7 +15,7 @@ constexpr std::uint64_t kSteamID64Base = 76561197960265728ULL;
 constexpr std::uint64_t kLegacyAccountMax = 0xFFFFFFFFULL;
 constexpr const char *kMigrationVersion = "steamid64-v2";
 constexpr const char *kMigrationChecksum = "6799cc4b228acdff3d599a31fb9546e4cd2641c82ff6169ae0728dcc2f457167";
-constexpr const char *kMigrationLock = "cs2-vip.vip_users.v2";
+constexpr const char *kMigrationLockPrefix = "cs2-vip:";
 
 enum class AccountColumnKind
 {
@@ -88,6 +88,14 @@ inline bool IsLegacyWidth(AccountColumnKind kind)
 
 struct MigrationPlan
 {
+	struct Step
+	{
+		std::string name;
+		std::string sql;
+		bool isDDL;
+		bool idempotent;
+	};
+
 	std::string lockQuery;
 	std::string createUsers;
 	std::string createHistory;
@@ -101,13 +109,16 @@ struct MigrationPlan
 	std::string finalizeUnsignedColumn;
 	std::string recordVersion;
 	std::string releaseLockQuery;
+	std::string verifyVersion;
+	std::vector<Step> steps;
 };
 
 inline MigrationPlan BuildMigrationPlan()
 {
 	MigrationPlan plan;
-	plan.lockQuery = "SELECT GET_LOCK(CONCAT(DATABASE(), '." + std::string(kMigrationLock) + "'), 30);";
-	plan.releaseLockQuery = "SELECT RELEASE_LOCK(CONCAT(DATABASE(), '." + std::string(kMigrationLock) + "'));";
+	const std::string lockExpression = "CONCAT('" + std::string(kMigrationLockPrefix) + "', LEFT(SHA2(CONCAT('lock:', DATABASE()), 256), 32))";
+	plan.lockQuery = "SELECT GET_LOCK(" + lockExpression + ", 30);";
+	plan.releaseLockQuery = "SELECT RELEASE_LOCK(" + lockExpression + ");";
 	plan.createUsers =
 		"CREATE TABLE IF NOT EXISTS `vip_users` ("
 		"`account_id` BIGINT UNSIGNED NOT NULL, "
@@ -176,8 +187,29 @@ inline MigrationPlan BuildMigrationPlan()
 	plan.finalizeUnsignedColumn =
 		"ALTER TABLE `vip_users` MODIFY `account_id` BIGINT UNSIGNED NOT NULL;";
 	plan.recordVersion =
-		"INSERT INTO `vip_schema_migrations` (`version`,`checksum`) VALUES ('" + std::string(kMigrationVersion) + "', "
-		"'" + std::string(kMigrationChecksum) + "') ON DUPLICATE KEY UPDATE `checksum`=VALUES(`checksum`);";
+		"INSERT IGNORE INTO `vip_schema_migrations` (`version`,`checksum`) VALUES ('" + std::string(kMigrationVersion) + "', "
+		"'" + std::string(kMigrationChecksum) + "');";
+	plan.verifyVersion =
+		"SELECT COUNT(*) FROM `vip_schema_migrations` WHERE `version`='" + std::string(kMigrationVersion) + "' AND `checksum`='"
+		+ std::string(kMigrationChecksum) + "';";
+	plan.steps = {
+		{"acquire-lock", plan.lockQuery, false, false},
+		{"create-users-table", plan.createUsers, true, true},
+		{"create-migration-history", plan.createHistory, true, true},
+		{"create-conflict-archive", plan.createConflicts, true, true},
+		{"widen-signed-column", plan.widenSignedColumn, true, true},
+		{"archive-canonical-conflicts", plan.archiveConflicts[0], false, true},
+		{"archive-legacy-conflicts", plan.archiveConflicts[1], false, true},
+		{"remove-canonical-conflicts", plan.removeConflicts[0], false, true},
+		{"remove-legacy-conflicts", plan.removeConflicts[1], false, true},
+		{"normalize-legacy", plan.normalizeLegacy, false, true},
+		{"verify-legacy", plan.verifyLegacy, false, true},
+		{"warn-unmapped", plan.warnUnmapped, false, true},
+		{"finalize-unsigned-column", plan.finalizeUnsignedColumn, true, true},
+		{"record-version", plan.recordVersion, false, true},
+		{"verify-version", plan.verifyVersion, false, true},
+		{"release-lock", plan.releaseLockQuery, false, false},
+	};
 	return plan;
 }
 

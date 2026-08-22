@@ -10,10 +10,10 @@ import shutil
 import subprocess
 import sys
 import unittest
+import json
 
 
 ROOT = Path(__file__).resolve().parents[2]
-HEADER = (ROOT / "include/vip_database_migration.h").read_text(encoding="utf-8")
 BASE = 76561197960265728
 
 
@@ -43,11 +43,18 @@ class Database:
             command.extend(["--database", self.args.database])
         environment = os.environ.copy()
         environment["MYSQL_PWD"] = self.args.password
-        completed = subprocess.run(command, input=sql, text=True, env=environment,
+        # Every connection explicitly enables the same strict mode.  Migration
+        # scenarios themselves use run_script() so the lock and all statements
+        # share one persistent client session.
+        session_sql = "SET SESSION sql_mode='STRICT_ALL_TABLES,NO_ZERO_DATE,NO_ZERO_IN_DATE';\n"
+        completed = subprocess.run(command, input=session_sql + sql, text=True, env=environment,
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         if completed.returncode:
             raise AssertionError(f"SQL failed ({completed.returncode}): {completed.stdout}")
         return completed.stdout.strip()
+
+    def run_script(self, statements: list[str]) -> str:
+        return self.run("\n".join(statements), database=True)
 
     def reset(self, rows: str, account_type: str = "INT") -> None:
         self.run(
@@ -66,70 +73,73 @@ class Database:
             "PRIMARY KEY(migration_version, original_account_id, canonical_account_id, sid, reason));"
         )
 
-    def migrate(self) -> None:
+    def migrate(self, plan: dict, stop_after: str | None = None) -> None:
+        steps = {item["name"]: item["sql"] for item in plan["ordered_steps"]}
         column_type = self.run(
             "SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS "
             "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='vip_users' AND COLUMN_NAME='account_id';"
         ).lower()
+        statements: list[str] = []
+        names: list[str] = []
+        def append(name: str) -> None:
+            names.append(name)
+            statements.append(steps[name])
+        for name in ("acquire-lock", "create-users-table", "create-migration-history", "create-conflict-archive"):
+            append(name)
         if "bigint" not in column_type:
-            self.run("ALTER TABLE vip_users MODIFY account_id BIGINT SIGNED NOT NULL;")
-        self.run(
-            "INSERT IGNORE INTO vip_users_migration_conflicts "
-            "(migration_version,original_account_id,canonical_account_id,sid,name,lastvisit,`group`,expires,reason) "
-            "SELECT 'steamid64-v2', legacy.account_id, canonical.account_id, legacy.sid, legacy.name, "
-            "legacy.lastvisit, legacy.`group`, legacy.expires, 'canonical-steamid64-wins' "
-            "FROM vip_users legacy JOIN vip_users canonical ON canonical.sid=legacy.sid "
-            "AND canonical.account_id=76561197960265728 + CASE WHEN legacy.account_id < 0 "
-            "THEN legacy.account_id + 4294967296 ELSE legacy.account_id END "
-            "WHERE legacy.account_id < 0 OR legacy.account_id BETWEEN 1 AND 4294967295;"
-            "INSERT IGNORE INTO vip_users_migration_conflicts "
-            "(migration_version,original_account_id,canonical_account_id,sid,name,lastvisit,`group`,expires,reason) "
-            "SELECT 'steamid64-v2', negative.account_id, positive.account_id, negative.sid, negative.name, "
-            "negative.lastvisit, negative.`group`, negative.expires, 'positive-legacy-wins' "
-            "FROM vip_users negative JOIN vip_users positive ON positive.sid=negative.sid "
-            "AND positive.account_id=negative.account_id+4294967296 WHERE negative.account_id < 0;"
-            "DELETE legacy FROM vip_users legacy JOIN vip_users canonical ON canonical.sid=legacy.sid "
-            "AND canonical.account_id=76561197960265728 + CASE WHEN legacy.account_id < 0 "
-            "THEN legacy.account_id + 4294967296 ELSE legacy.account_id END "
-            "WHERE legacy.account_id < 0 OR legacy.account_id BETWEEN 1 AND 4294967295;"
-            "DELETE negative FROM vip_users negative JOIN vip_users positive ON positive.sid=negative.sid "
-            "AND positive.account_id=negative.account_id+4294967296 WHERE negative.account_id < 0;"
-            "UPDATE vip_users SET account_id=76561197960265728 + CASE WHEN account_id < 0 "
-            "THEN account_id+4294967296 ELSE account_id END "
-            "WHERE account_id < 0 OR account_id BETWEEN 1 AND 4294967295;"
-        )
+            append("widen-signed-column")
+        for name in (
+            "archive-canonical-conflicts", "archive-legacy-conflicts",
+            "remove-canonical-conflicts", "remove-legacy-conflicts",
+            "normalize-legacy", "verify-legacy", "warn-unmapped",
+        ):
+            append(name)
+        if not is_unsigned_bigint(column_type):
+            append("finalize-unsigned-column")
+        for name in ("record-version", "verify-version", "release-lock"):
+            append(name)
+        if stop_after is not None:
+            if stop_after not in names:
+                raise AssertionError(f"unknown migration fault checkpoint: {stop_after}")
+            self.run_script(statements[:names.index(stop_after) + 1])
+            return
+        self.run_script(statements)
         db_count = self.run(
             "SELECT COUNT(*) FROM vip_users WHERE account_id < 0 "
             "OR account_id BETWEEN 1 AND 4294967295;"
         )
         if db_count != "0":
             raise AssertionError(f"legacy IDs remain after migration: {db_count!r}")
-        if not is_unsigned_bigint(column_type):
-            self.run("ALTER TABLE vip_users MODIFY account_id BIGINT UNSIGNED NOT NULL;")
-        self.run(
-            "CREATE TABLE IF NOT EXISTS vip_schema_migrations (version VARCHAR(64) NOT NULL, "
-            "checksum CHAR(64) NOT NULL, applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "
-            "PRIMARY KEY(version));"
-            "INSERT INTO vip_schema_migrations(version,checksum) VALUES "
-            "('steamid64-v2','6799cc4b228acdff3d599a31fb9546e4cd2641c82ff6169ae0728dcc2f457167') "
-            "ON DUPLICATE KEY UPDATE checksum=VALUES(checksum);"
-        )
+
+
+def load_plan() -> dict:
+    emitter = os.environ.get("MIGRATION_PLAN_EMITTER")
+    if not emitter or not Path(emitter).is_file():
+        raise RuntimeError("MIGRATION_PLAN_EMITTER must point to the compiled production migration emitter")
+    completed = subprocess.run([emitter], check=True, text=True, stdout=subprocess.PIPE)
+    plan = json.loads(completed.stdout)
+    if plan.get("migration_version") != "steamid64-v2" or not plan.get("ordered_steps"):
+        raise AssertionError("migration emitter returned an invalid production plan")
+    return plan
 
 
 class StaticMigrationContractTests(unittest.TestCase):
     def test_plan_contains_lock_staged_schema_and_conflict_archive(self):
-        for required in (
-            "GET_LOCK", "RELEASE_LOCK", "vip_schema_migrations",
-            "vip_users_migration_conflicts", "BIGINT SIGNED", "BIGINT UNSIGNED",
-            "4294967296", "steamid64-v2", "account_id` = 0",
-            "canonical_account_id`, `sid`, `reason",
-        ):
-            self.assertIn(required, HEADER)
+        try:
+            plan = load_plan()
+        except RuntimeError as exc:
+            self.skipTest(str(exc))
+        self.assertEqual(plan["migration_version"], "steamid64-v2")
+        names = [item["name"] for item in plan["ordered_steps"]]
+        self.assertEqual(names[0], "acquire-lock")
+        self.assertEqual(names[-1], "release-lock")
+        self.assertIn("verify-version", names)
+        self.assertIn("SHA2", plan["lock_expression"])
 
 
 def run_database_cases(args: argparse.Namespace) -> None:
     db = Database(args)
-    db.run("SET SESSION sql_mode='STRICT_ALL_TABLES,NO_ZERO_DATE,NO_ZERO_IN_DATE';")
+    plan = load_plan()
 
     # A signed INT can contain legacy account IDs, but cannot contain a
     # SteamID64. Exercise that migration as a legacy-only install first; the
@@ -137,7 +147,7 @@ def run_database_cases(args: argparse.Namespace) -> None:
     db.reset("(-1, 'legacy-negative', 1, 7, 'vip', 0),"
              "(42, 'legacy-positive', 3, 8, 'vip', 0),"
              "(0, 'zero', 4, 9, 'vip', 0)", "INT")
-    db.migrate()
+    db.migrate(plan)
     if db.run("SELECT account_id,sid FROM vip_users ORDER BY sid;") != (
             f"{BASE + 4294967295}\t7\n{BASE + 42}\t8\n0\t9"):
         raise AssertionError("signed INT legacy rows were not normalized")
@@ -153,14 +163,14 @@ def run_database_cases(args: argparse.Namespace) -> None:
              f"({BASE + 4294967295}, 'canonical', 2, 7, 'vip', 0),"
              "(42, 'legacy-positive', 3, 8, 'vip', 0),"
              "(0, 'zero', 4, 9, 'vip', 0)", "BIGINT SIGNED")
-    db.migrate()
+    db.migrate(plan)
     rows = db.run("SELECT account_id,sid FROM vip_users ORDER BY sid;")
     expected = f"{BASE + 4294967295}\t7\n{BASE + 42}\t8\n0\t9"
     if rows != expected:
         raise AssertionError(f"unexpected migrated rows: {rows!r}")
     if db.run("SELECT COUNT(*) FROM vip_users_migration_conflicts;") != "1":
         raise AssertionError("conflicting legacy rows were not archived")
-    db.migrate()
+    db.migrate(plan)
     if db.run("SELECT COUNT(*) FROM vip_users;") != "3":
         raise AssertionError("second migration changed row count")
     if not is_unsigned_bigint(db.run("SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS "
@@ -179,7 +189,7 @@ def run_database_cases(args: argparse.Namespace) -> None:
              "(42, 'positive-legacy', 7, 11, 'vip', 0),"
              "(0, 'zero', 4, 9, 'vip', 0),"
              "(9000000000000000000, 'unknown', 5, 10, 'vip', 0)", "BIGINT SIGNED")
-    db.migrate()
+    db.migrate(plan)
     if db.run("SELECT account_id,name,sid FROM vip_users ORDER BY sid;") != (
             f"{BASE + 4294967295}\tcanonical\t7\n0\tzero\t9\n"
             "9000000000000000000\tunknown\t10\n"
@@ -189,6 +199,20 @@ def run_database_cases(args: argparse.Namespace) -> None:
         raise AssertionError("legacy conflict archive was not preserved")
     if db.run("SELECT COUNT(*) FROM vip_users_migration_conflicts WHERE reason='positive-legacy-wins';") != "1":
         raise AssertionError("negative legacy conflict was not archived with its reason")
+
+    if os.environ.get("MIGRATION_FAULT_INJECTION") == "1":
+        checkpoints = [item["name"] for item in plan["ordered_steps"]
+                       if item["name"] != "acquire-lock"]
+        for checkpoint in checkpoints:
+            db.reset("(-1, 'legacy-negative', 1, 7, 'vip', 0),"
+                     "(42, 'legacy-positive', 3, 8, 'vip', 0)", "INT")
+            db.migrate(plan, stop_after=checkpoint)
+            db.migrate(plan)
+            if not is_unsigned_bigint(db.run(
+                    "SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS "
+                    "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='vip_users' "
+                    "AND COLUMN_NAME='account_id';")):
+                raise AssertionError(f"migration did not recover after checkpoint {checkpoint}")
 
 
 def main() -> int:

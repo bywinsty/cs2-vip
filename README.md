@@ -37,10 +37,10 @@ Console commands:
 - `vip_remove <userid|nickname|accountid>` - remove VIP access from a player
 - `vip_give <userid|nickname|accountid> <time_second> <group>` - give VIP access to a player
 
-`vip_runtime_probe <32-hex-nonce>` is an internal, server-console-only CI
-command. It is not an administrative or client command. When the database is
-ready, it writes nonce-bound evidence under `addons/data` for the protected
-CSHOST runtime-validation workflow.
+`vip_runtime_probe <32-hex-nonce> <64-hex-stage-id>` is an internal,
+server-console-only CI command. It is not an administrative or client command.
+When the database is ready, it writes nonce- and stage-bound evidence under
+`addons/data` for the protected CSHOST runtime-validation workflow.
 
 ## Configuration
 - Database file: `addons/configs/databases.cfg`
@@ -114,13 +114,17 @@ The validation produces a custom runtime attestation bound to the SHA-256 of
 issued by the pinned validation workflow for the same commit/build/artifact,
 records a successful rollback and is no older than 24 hours.
 
+The validation job uses only the ephemeral `self-hosted,cshost-runtime,ephemeral`
+runner group. Plain FTP is accepted only inside the documented isolated network
+policy; it is not a cryptographic transport boundary.
+
 An operator can verify the downloaded candidate's runtime signature and pinned
 signer before inspecting the JSON predicate:
 
 ```bash
 gh attestation verify vip.zip \
   --repo bywinsty/cs2-vip \
-  --predicate-type https://github.com/bywinsty/cs2-vip/runtime-validation/v3 \
+  --predicate-type https://github.com/bywinsty/cs2-vip/runtime-validation/v4 \
   --signer-workflow bywinsty/cs2-vip/.github/workflows/cshost-runtime-validation.yml \
   --format json
 ```

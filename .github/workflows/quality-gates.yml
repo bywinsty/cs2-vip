@@ -23,6 +23,12 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Compile production migration plan emitter
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -Wall -Wextra -Werror -Iinclude \
+            tests/migration_plan_emitter.cpp -o "$RUNNER_TEMP/migration-plan-emitter"
+          echo "MIGRATION_PLAN_EMITTER=$RUNNER_TEMP/migration-plan-emitter" >> "$GITHUB_ENV"
       - name: Run Python contract and unit tests
         run: |
           set -euo pipefail
@@ -30,6 +36,7 @@ jobs:
             .github/scripts/test_build_contract.py
             .github/scripts/test_branch_protection.py
             .github/scripts/test_cshost_runtime_validate.py
+            .github/scripts/test_sql_query_contract.py
             .github/scripts/test_generate_spdx_sbom.py
             .github/scripts/test_release_workflow.py
             .github/scripts/test_reproducible_archive.py

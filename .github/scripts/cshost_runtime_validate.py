@@ -9,6 +9,7 @@ import ftplib
 import hashlib
 import io
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import secrets
@@ -16,17 +17,20 @@ import socket
 import struct
 import sys
 import time
+from typing import Protocol
 import urllib.parse
 import urllib.request
 import zipfile
 
 
-REPORT_SCHEMA = "https://github.com/bywinsty/cs2-vip/runtime-validation/v3"
-PROBE_SCHEMA = "https://github.com/bywinsty/cs2-vip/runtime-probe/v1"
-SENTINEL_SCHEMA = "https://github.com/bywinsty/cs2-vip/cshost-runtime-sentinel/v3"
-JOURNAL_SCHEMA = "https://github.com/bywinsty/cs2-vip/cshost-runtime-journal/v3"
-SENTINEL_PATH = ".vip-ci/runtime-sentinel-v3.json"
-JOURNAL_PATH = ".vip-ci/runtime-overlay-journal-v3.json"
+REPORT_SCHEMA = "https://github.com/bywinsty/cs2-vip/runtime-validation/v4"
+PROBE_SCHEMA = "https://github.com/bywinsty/cs2-vip/runtime-probe/v2"
+SENTINEL_SCHEMA = "https://github.com/bywinsty/cs2-vip/cshost-runtime-sentinel/v4"
+JOURNAL_SCHEMA = "https://github.com/bywinsty/cs2-vip/cshost-runtime-journal/v4"
+LEGACY_JOURNAL_SCHEMA = "https://github.com/bywinsty/cs2-vip/cshost-runtime-journal/v3"
+SENTINEL_PATH = ".vip-ci/runtime-sentinel-v4.json"
+JOURNAL_PATH = ".vip-ci/runtime-overlay-journal-v4.json"
+LEGACY_JOURNAL_PATH = ".vip-ci/runtime-overlay-journal-v3.json"
 PLUGIN_PATH = "addons/vip/vip.so"
 EVIDENCE_DIRECTORY = "addons/data"
 REQUIRED_CAPABILITIES = frozenset({"metamod", "utils", "menus", "players", "sqlmm"})
@@ -37,6 +41,16 @@ NONCE_RE = re.compile(r"[0-9a-f]{32}\Z")
 
 class ValidationError(RuntimeError):
     """Expected fail-closed validation error."""
+
+
+class Transport(Protocol):
+    """Minimal remote file contract used by validation and recovery."""
+
+    def exists(self, path: str) -> bool: ...
+    def download(self, path: str) -> bytes: ...
+    def upload_atomic(self, path: str, payload: bytes) -> None: ...
+    def rename(self, source: str, destination: str) -> None: ...
+    def delete(self, path: str, *, missing_ok: bool = False) -> None: ...
 
 
 def utc_now() -> str:
@@ -93,7 +107,7 @@ def load_sentinel(raw: bytes, expected_sha256: str) -> dict:
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValidationError(f"runtime sentinel is not valid UTF-8 JSON: {exc}") from exc
     if not isinstance(config, dict) or config.get("schema") != SENTINEL_SCHEMA:
-        raise ValidationError("runtime sentinel schema is not v3")
+        raise ValidationError("runtime sentinel schema is not v4")
     if config.get("purpose") != "vip-ci-test-server" or config.get("production") is not False:
         raise ValidationError("runtime sentinel does not identify a non-production VIP CI server")
     if remote_path(config.get("plugin_path"), "sentinel.plugin_path") != PLUGIN_PATH:
@@ -275,6 +289,11 @@ class FTPTransport:
             raise ValidationError(f"FTP delete failed for {path}") from exc
 
 
+# Keep the old symbol importable for contract tests and downstream tooling while
+# making the transport boundary explicit in the validator implementation.
+LegacyFTPTransport = FTPTransport
+
+
 class CshostAPI:
     def __init__(self, base_url: str, token: str, timeout: int = 30):
         parsed = urllib.parse.urlsplit(base_url)
@@ -303,6 +322,14 @@ class CshostAPI:
 
     def status(self) -> dict:
         return self.call("status")
+
+    def assert_stage_identity(self, expected_stage_id: str) -> dict:
+        """Bind the HTTPS control plane to the hash-pinned runtime sentinel."""
+        status = self.status()
+        observed = status.get("stage_id", status.get("stageId"))
+        if observed != expected_stage_id:
+            raise ValidationError("CSHOST API stage identity does not match the sentinel")
+        return {"stage_id": expected_stage_id}
 
     def is_online(self) -> bool:
         value = str(self.status().get("online", ""))
@@ -418,10 +445,11 @@ def load_candidate(artifact_dir: Path, expected_commit: str) -> dict:
     }
 
 
-def validate_probe(value: dict, nonce: str, expected_commit: str) -> dict:
+def validate_probe(value: dict, nonce: str, expected_commit: str, expected_stage_id: str) -> dict:
     if not isinstance(value, dict) or value.get("schema") != PROBE_SCHEMA or value.get("nonce") != nonce:
         raise ValidationError("runtime probe schema or nonce mismatch")
-    if value.get("build_commit") != expected_commit or value.get("ready") is not True:
+    if (value.get("build_commit") != expected_commit or value.get("stage_id") != expected_stage_id
+            or value.get("ready") is not True):
         raise ValidationError("runtime probe commit/readiness mismatch")
     interfaces = value.get("interfaces")
     if not isinstance(interfaces, dict) or interfaces.get("IVIPApi001") is not True or interfaces.get("IVIPApi002") is not True:
@@ -433,14 +461,15 @@ def validate_probe(value: dict, nonce: str, expected_commit: str) -> dict:
     return value
 
 
-def load_journal(ftp: FTPTransport) -> dict | None:
-    if not ftp.exists(JOURNAL_PATH):
+def load_journal(ftp: Transport) -> dict | None:
+    journal_path = JOURNAL_PATH if ftp.exists(JOURNAL_PATH) else LEGACY_JOURNAL_PATH
+    if not ftp.exists(journal_path):
         return None
     try:
-        journal = json.loads(ftp.download(JOURNAL_PATH))
+        journal = json.loads(ftp.download(journal_path))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValidationError("remote rollback journal is invalid JSON") from exc
-    if not isinstance(journal, dict) or journal.get("schema") != JOURNAL_SCHEMA:
+    if not isinstance(journal, dict) or journal.get("schema") not in {JOURNAL_SCHEMA, LEGACY_JOURNAL_SCHEMA}:
         raise ValidationError("remote rollback journal schema is invalid")
     if journal.get("plugin_path") != PLUGIN_PATH:
         raise ValidationError("remote rollback journal plugin path is invalid")
@@ -450,29 +479,60 @@ def load_journal(ftp: FTPTransport) -> dict | None:
     journal["backup_path"] = backup
     journal["original_sha256"] = require_sha256(journal.get("original_sha256"), "journal.original_sha256")
     journal["candidate_sha256"] = require_sha256(journal.get("candidate_sha256"), "journal.candidate_sha256")
+    backup_sha = journal.get("backup_sha256", journal["original_sha256"])
+    journal["backup_sha256"] = require_sha256(backup_sha, "journal.backup_sha256")
+    journal["journal_path"] = journal_path
     if not isinstance(journal.get("original_online"), bool):
         raise ValidationError("journal.original_online must be boolean")
     return journal
 
 
-def restore_from_journal(api: CshostAPI, ftp: FTPTransport, config: dict, journal: dict) -> dict:
+def _download_verified(ftp: Transport, path: str, expected_sha256: str, field: str) -> bytes:
+    payload = ftp.download(path)
+    actual = sha256_bytes(payload)
+    if actual != expected_sha256:
+        raise ValidationError(f"{field} SHA-256 mismatch")
+    return payload
+
+
+def restore_from_journal(api: CshostAPI, ftp: Transport, config: dict, journal: dict) -> dict:
+    """Restore without deleting the installed binary until backup is verified."""
     if api.is_online():
         api.stop(config["shutdown_timeout_seconds"])
     plugin_exists = ftp.exists(PLUGIN_PATH)
+    installed_hash = None
     if plugin_exists:
         installed_hash = sha256_bytes(ftp.download(PLUGIN_PATH))
-        if installed_hash == journal["original_sha256"] and not ftp.exists(journal["backup_path"]):
-            pass
-        elif installed_hash == journal["candidate_sha256"]:
-            ftp.delete(PLUGIN_PATH)
-        else:
+        if installed_hash not in {journal["original_sha256"], journal["candidate_sha256"]}:
             raise ValidationError("rollback refused: installed VIP binary is neither candidate nor original")
-    if ftp.exists(journal["backup_path"]):
+
+    backup_exists = ftp.exists(journal["backup_path"])
+    if installed_hash != journal["original_sha256"]:
+        # Verify the backup before moving or deleting the candidate.  This is
+        # the critical invariant missing from the previous implementation.
+        if not backup_exists:
+            raise ValidationError("rollback failed: verified original backup is missing")
+        backup_payload = _download_verified(
+            ftp, journal["backup_path"], journal["original_sha256"], "rollback backup"
+        )
+        staging = f"{journal['backup_path']}.restore-{secrets.token_hex(8)}"
+        quarantine = f"{PLUGIN_PATH}.quarantine-{secrets.token_hex(8)}"
+        ftp.upload_atomic(staging, backup_payload)
+        _download_verified(ftp, staging, journal["original_sha256"], "rollback staging")
         if ftp.exists(PLUGIN_PATH):
-            if sha256_bytes(ftp.download(PLUGIN_PATH)) != journal["original_sha256"]:
-                raise ValidationError("rollback refused to overwrite an unknown VIP binary")
-            ftp.delete(PLUGIN_PATH)
-        ftp.rename(journal["backup_path"], PLUGIN_PATH)
+            ftp.rename(PLUGIN_PATH, quarantine)
+        try:
+            ftp.rename(staging, PLUGIN_PATH)
+            _download_verified(ftp, PLUGIN_PATH, journal["original_sha256"], "restored VIP")
+        except Exception:
+            # Preserve both quarantine and journal for restore-only recovery.
+            if ftp.exists(PLUGIN_PATH):
+                ftp.rename(PLUGIN_PATH, staging)
+            if ftp.exists(quarantine) and not ftp.exists(PLUGIN_PATH):
+                ftp.rename(quarantine, PLUGIN_PATH)
+            raise
+        ftp.delete(quarantine, missing_ok=True)
+
     if not ftp.exists(PLUGIN_PATH):
         raise ValidationError("rollback failed: original VIP binary is missing")
     restored_hash = sha256_bytes(ftp.download(PLUGIN_PATH))
@@ -482,10 +542,13 @@ def restore_from_journal(api: CshostAPI, ftp: FTPTransport, config: dict, journa
         api.start(config["startup_timeout_seconds"])
     elif api.is_online():
         api.stop(config["shutdown_timeout_seconds"])
-    ftp.delete(JOURNAL_PATH)
     state_restored = api.is_online() is journal["original_online"]
     if not state_restored:
         raise ValidationError("rollback failed: original server state was not restored")
+    # Cleanup is deliberately last.  If it fails, the journal remains and the
+    # next restore-only run can safely verify the already-restored binary.
+    ftp.delete(journal["backup_path"], missing_ok=True)
+    ftp.delete(journal.get("journal_path", JOURNAL_PATH), missing_ok=True)
     return {
         "result": "success",
         "restored_binary_sha256": restored_hash,
@@ -498,14 +561,14 @@ def add_stage(report: dict, name: str, status: str, **details: object) -> None:
     report.setdefault("stages", []).append({"name": name, "status": status, "at": utc_now(), **details})
 
 
-def poll_probe(ftp: FTPTransport, path: str, nonce: str, commit: str, timeout: int) -> dict:
+def poll_probe(ftp: Transport, path: str, nonce: str, commit: str, stage_id: str, timeout: int) -> dict:
     deadline = time.monotonic() + timeout
     last_error = "evidence file has not appeared"
     while time.monotonic() < deadline:
         if ftp.exists(path):
             try:
                 value = json.loads(ftp.download(path))
-                return validate_probe(value, nonce, commit)
+                return validate_probe(value, nonce, commit, stage_id)
             except (UnicodeDecodeError, json.JSONDecodeError, ValidationError) as exc:
                 last_error = str(exc)
         time.sleep(2)
@@ -513,11 +576,18 @@ def poll_probe(ftp: FTPTransport, path: str, nonce: str, commit: str, timeout: i
 
 
 def run(args: argparse.Namespace, report: dict) -> None:
+    if args.transport == "legacy-ftp" and os.environ.get("CSHOST_RUNTIME_NETWORK_PREFLIGHT") != "passed":
+        raise ValidationError("plain FTP requires a passed isolated-runner network preflight")
+    report["network_preflight"] = {
+        "status": "passed",
+        "policy_id": args.runner_policy_id,
+    }
     api = CshostAPI(args.api_base, args.api_token)
-    with FTPTransport(args.ftp_host, args.ftp_port, args.ftp_user, args.ftp_password, args.ftp_root) as ftp:
+    with LegacyFTPTransport(args.ftp_host, args.ftp_port, args.ftp_user, args.ftp_password, args.ftp_root) as ftp:
         sentinel_raw = ftp.download(SENTINEL_PATH)
         config = load_sentinel(sentinel_raw, args.sentinel_sha256)
         report["stage_id"] = config["stage_id"]
+        report["stage_identity"] = api.assert_stage_identity(config["stage_id"])
         add_stage(report, "sentinel", "success", sha256=sha256_bytes(sentinel_raw))
         players = api.assert_no_players()
         add_stage(report, "players-preflight", "success", **players)
@@ -561,8 +631,10 @@ def run(args: argparse.Namespace, report: dict) -> None:
             "plugin_path": PLUGIN_PATH,
             "backup_path": backup_path,
             "original_sha256": original_sha256,
+            "backup_sha256": original_sha256,
             "candidate_sha256": candidate["binary_sha256"],
             "original_online": original_online,
+            "state": "prepared",
         }
         ftp.upload_json(JOURNAL_PATH, journal)
         add_stage(report, "journal", "success")
@@ -572,13 +644,16 @@ def run(args: argparse.Namespace, report: dict) -> None:
                 api.stop(config["shutdown_timeout_seconds"])
             add_stage(report, "stop-original", "success", originally_online=original_online)
             ftp.rename(PLUGIN_PATH, backup_path)
+            _download_verified(ftp, backup_path, original_sha256, "uploaded original backup")
             journal["status"] = "backed-up"
+            journal["state"] = "backed-up"
             ftp.upload_json(JOURNAL_PATH, journal)
             add_stage(report, "backup-original", "success", original_sha256=original_sha256)
             ftp.upload_atomic(PLUGIN_PATH, candidate["binary"])
             if sha256_bytes(ftp.download(PLUGIN_PATH)) != candidate["binary_sha256"]:
                 raise ValidationError("candidate binary SHA-256 mismatch after installation")
             journal["status"] = "candidate-installed"
+            journal["state"] = "candidate-installed"
             ftp.upload_json(JOURNAL_PATH, journal)
             add_stage(report, "install-candidate", "success")
             api.start(config["startup_timeout_seconds"])
@@ -590,9 +665,10 @@ def run(args: argparse.Namespace, report: dict) -> None:
             report["cs2_build"] = a2s["version"]
             add_stage(report, "a2s", "success", version=a2s["version"])
             ftp.delete(evidence_path, missing_ok=True)
-            api.console(f"vip_runtime_probe {report['nonce']}")
+            api.console(f"vip_runtime_probe {report['nonce']} {config['stage_id']}")
             report["probe"] = poll_probe(
-                ftp, evidence_path, report["nonce"], args.expected_commit, config["probe_timeout_seconds"]
+                ftp, evidence_path, report["nonce"], args.expected_commit, config["stage_id"],
+                config["probe_timeout_seconds"]
             )
             add_stage(report, "runtime-probe", "success")
             report["result"] = "success"
@@ -632,6 +708,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ftp-password", required=True)
     parser.add_argument("--ftp-root", default=".")
     parser.add_argument("--sentinel-sha256", required=True)
+    parser.add_argument("--transport", choices=("legacy-ftp",), default="legacy-ftp")
+    parser.add_argument("--runner-policy-id", default="cshost-runtime-ephemeral-v1")
+    parser.add_argument("--runner-name", default="unknown")
     args = parser.parse_args()
     if not args.validation_run_id.isdigit():
         parser.error("--validation-run-id must be numeric")
@@ -661,6 +740,10 @@ def main() -> int:
         "a2s": {},
         "probe": {},
         "rollback": {"result": "not-started", "state_restored": False},
+        "transport": args.transport,
+        "runner_policy_id": args.runner_policy_id,
+        "runner_name": args.runner_name,
+        "network_preflight": {"status": "not-run"},
         "stages": [],
     }
     status = 1
