@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - Core
+      - PR
       - dev
   pull_request:
     branches:
@@ -332,23 +333,62 @@ jobs:
           path: |
             ${{ runner.temp }}/vip.zip
             ${{ runner.temp }}/vip.spdx.json
-          archive: true
           if-no-files-found: error
           retention-days: 30
+
+  attest-candidate:
+    name: Attest ${{ github.ref_name }} candidate
+    if: >-
+      ${{
+        github.event_name == 'push' &&
+        (github.ref_name == 'PR' || github.ref_name == 'Core') &&
+        needs.build.result == 'success'
+      }}
+    needs: build
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Download candidate artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: compile
+          path: candidate
+
+      - name: Verify exact candidate subjects
+        run: |
+          set -euo pipefail
+          expected=$'vip.spdx.json\nvip.zip'
+          actual="$(find candidate -maxdepth 1 -type f -printf '%f\n' | sort)"
+          test "$actual" = "$expected"
+          test "$(find candidate -mindepth 1 -maxdepth 1 | wc -l)" -eq 2
+          zip -T candidate/vip.zip
+
+      - name: Attest candidate archive provenance
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: candidate/vip.zip
+
+      - name: Attest candidate archive SBOM
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: candidate/vip.zip
+          sbom-path: candidate/vip.spdx.json
+
+      - name: Attest candidate SPDX provenance
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: candidate/vip.spdx.json
 
   publish-release:
     name: Publish ${{ github.ref_name }} release
     if: >-
       ${{
         github.event_name == 'push' &&
-        (
-          github.ref_name == 'dev' ||
-          (
-            github.ref_name == 'Core' &&
-            vars.RUNTIME_VALIDATION_SHA == github.sha &&
-            vars.RUNTIME_VALIDATION_REPORT_URL != ''
-          )
-        ) &&
+        github.ref_name == 'dev' &&
         needs.build.result == 'success'
       }}
     needs: build
@@ -364,8 +404,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ github.ref_name }}
       RELEASE_TITLE: ${{ github.ref_name }}
-      IS_PRERELEASE: ${{ github.ref_name == 'dev' }}
-      RUNTIME_VALIDATION_REPORT_URL: ${{ vars.RUNTIME_VALIDATION_REPORT_URL }}
+      IS_PRERELEASE: "true"
 
     steps:
       - name: Checkout repository
@@ -426,10 +465,7 @@ jobs:
       - name: Create or update release
         if: steps.branch-tip.outputs.stale != 'true'
         run: |
-          notes=$'Automated release from '"$RELEASE_TAG"$'.\n\nCommit: '"$GITHUB_SHA"$'\nWorkflow run: https://github.com/'"$GITHUB_REPOSITORY"'/actions/runs/'"$GITHUB_RUN_ID"
-          if [[ "$IS_PRERELEASE" != "true" ]]; then
-            notes+=$'\nRuntime validation: '"$RUNTIME_VALIDATION_REPORT_URL"
-          fi
+          notes=$'Automated prerelease from '"$RELEASE_TAG"$'.\n\nCommit: '"$GITHUB_SHA"$'\nWorkflow run: https://github.com/'"$GITHUB_REPOSITORY"'/actions/runs/'"$GITHUB_RUN_ID"
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
@@ -465,17 +501,36 @@ jobs:
           expected=$'vip.spdx.json\nvip.zip'
           actual="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort)"
           test "$actual" = "$expected"
-          for subject in release-files/vip.zip release-files/vip.spdx.json; do
-            verified=false
-            for attempt in 1 2 3 4 5; do
-              if gh attestation verify "$subject" --repo "$GITHUB_REPOSITORY"; then
-                verified=true
-                break
-              fi
-              sleep 3
-            done
-            test "$verified" = true
+          downloaded="$(mktemp -d)"
+          downloaded_ok=false
+          for attempt in 1 2 3 4 5; do
+            rm -rf "$downloaded"/*
+            if gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern vip.zip --pattern vip.spdx.json --dir "$downloaded"; then
+              downloaded_ok=true
+              break
+            fi
+            sleep 3
+          done
+          test "$downloaded_ok" = true
+          test "$(find "$downloaded" -mindepth 1 -maxdepth 1 | wc -l)" -eq 2
+          test "$(find "$downloaded" -maxdepth 1 -type f -printf '%f\n' | sort)" = "$expected"
+          for name in vip.zip vip.spdx.json; do
+            test "$(stat -c '%s' "release-files/$name")" = "$(stat -c '%s' "$downloaded/$name")"
+            test "$(sha256sum "release-files/$name" | cut -d' ' -f1)" = \
+              "$(sha256sum "$downloaded/$name" | cut -d' ' -f1)"
+            cmp "release-files/$name" "$downloaded/$name"
           done
           python .github/scripts/verify_spdx_subject.py \
-            --archive release-files/vip.zip \
-            --sbom release-files/vip.spdx.json
+            --archive "$downloaded/vip.zip" \
+            --sbom "$downloaded/vip.spdx.json"
+          for attempt in 1 2 3 4 5; do
+            if gh attestation verify "$downloaded/vip.zip" --repo "$GITHUB_REPOSITORY" && \
+              gh attestation verify "$downloaded/vip.zip" --repo "$GITHUB_REPOSITORY" \
+                --predicate-type https://spdx.dev/Document/v2.3 && \
+              gh attestation verify "$downloaded/vip.spdx.json" --repo "$GITHUB_REPOSITORY"; then
+              exit 0
+            fi
+            sleep 3
+          done
+          exit 1

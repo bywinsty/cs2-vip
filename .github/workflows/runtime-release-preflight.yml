@@ -7,7 +7,10 @@ on:
         description: Release tag to verify before running the local server harness
         required: true
         default: dev
-        type: string
+        type: choice
+        options:
+          - dev
+          - Core
 
 permissions:
   contents: read
@@ -41,4 +44,7 @@ jobs:
             --archive release-files/vip.zip \
             --sbom release-files/vip.spdx.json
           gh attestation verify release-files/vip.zip --repo "$GITHUB_REPOSITORY"
+          gh attestation verify release-files/vip.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --predicate-type https://spdx.dev/Document/v2.3
           gh attestation verify release-files/vip.spdx.json --repo "$GITHUB_REPOSITORY"
