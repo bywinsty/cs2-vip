@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import unittest
 
 import verify_elf_hardening as verifier
@@ -36,6 +37,35 @@ class ElfCompatibilityTests(unittest.TestCase):
     def test_rejects_malformed_maximum(self) -> None:
         with self.assertRaisesRegex(ValueError, "invalid version"):
             verifier.parse_version("2.x")
+
+    def test_rejects_exact_missing_library_marker(self) -> None:
+        with self.assertRaisesRegex(ValueError, "runtime library was not found"):
+            verifier.validate_runtime_relocations(
+                "libexample.so => not found", Path("build/package/addons/vip/vip.so")
+            )
+
+    def test_does_not_treat_version_error_as_missing_library(self) -> None:
+        diagnostics = verifier.validate_runtime_relocations(
+            "/lib64/libm.so.6: version `GLIBC_2.29' not found "
+            "(required by /sdk/libtier0.so)\n"
+            "undefined symbol: exp, version GLIBC_2.29\t(/sdk/libtier0.so)",
+            Path("build/package/addons/vip/vip.so"),
+        )
+        self.assertEqual(len(diagnostics), 1)
+        self.assertIn("libtier0.so", diagnostics[0])
+
+    def test_rejects_unresolved_plugin_symbol(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unresolved symbol detected in plugin"):
+            verifier.validate_runtime_relocations(
+                "undefined symbol: missing_api\t(build/package/addons/vip/vip.so)",
+                Path("build/package/addons/vip/vip.so"),
+            )
+
+    def test_rejects_unowned_unresolved_symbol(self) -> None:
+        with self.assertRaisesRegex(ValueError, "no owning ELF object"):
+            verifier.validate_runtime_relocations(
+                "undefined symbol: missing_api", Path("build/package/addons/vip/vip.so")
+            )
 
 
 if __name__ == "__main__":
