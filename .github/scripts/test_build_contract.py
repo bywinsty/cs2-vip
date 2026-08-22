@@ -54,6 +54,8 @@ def main() -> int:
         failures.append("manylinux build must not inject a host-glibc Python runtime")
     if "ensure_noinline_pattern_scan" not in compatibility_patches or '__attribute__((noinline))' not in compatibility_patches:
         failures.append("GCC 14 SchemaEntity pattern-scan compatibility patch is missing")
+    if "patch_gcc14_signedness" not in compatibility_patches or "static_cast<uint32>(0)" not in compatibility_patches:
+        failures.append("GCC 14 HL2SDK signedness compatibility patches are missing")
     for required in ("-fstack-protector-strong", "_FORTIFY_SOURCE=2", "-Wdate-time", "-ffile-prefix-map", "-z,relro,-z,now,-z,noexecstack"):
         if required not in build:
             failures.append(f"hardening requirement is missing: {required}")

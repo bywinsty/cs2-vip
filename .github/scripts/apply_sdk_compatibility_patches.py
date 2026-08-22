@@ -51,6 +51,19 @@ def ensure_noinline_pattern_scan(path: Path) -> None:
     replace_or_verify(path, old, new)
 
 
+def patch_gcc14_signedness(sdk_root: Path) -> None:
+    replace_or_verify(
+        sdk_root / "public" / "tier1" / "keyvalues3.h",
+        "if(initial_size <= NODE::DATA_SIZE)",
+        "if(static_cast<size_t>(initial_size) <= NODE::DATA_SIZE)",
+    )
+    replace_or_verify(
+        sdk_root / "public" / "bitvec.h",
+        "if ( this->Base()[i] != ~0 )",
+        "if ( this->Base()[i] != ~static_cast<uint32>(0) )",
+    )
+
+
 def patch_proto(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     syntax = [line.strip() for line in text.splitlines() if line.strip().startswith("syntax = ")]
@@ -86,6 +99,7 @@ def main() -> int:
     sdk_root = args.sdk_root
     patch_proto(args.proto_path or sdk_root / "common" / "network_connection.proto")
     patch_manifest(args.manifest_path, sdk_root, args.require_include or ["public/game/server"])
+    patch_gcc14_signedness(sdk_root)
     schema = args.schema_root
     ensure_include(schema / "globaltypes.h")
     replace_or_verify(schema / "schemasystem.cpp", "NetworkStateChanged_t", "NetworkStateChangedData")
