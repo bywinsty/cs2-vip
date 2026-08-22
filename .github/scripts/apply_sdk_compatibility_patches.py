@@ -88,11 +88,16 @@ def patch_gcc14_signedness(sdk_root: Path) -> None:
         "if ( this->Base()[i] != ~0 )",
         "if ( this->Base()[i] != ~static_cast<uint32>(0) )",
     )
-    replace_or_verify(
-        sdk_root / "public" / "tier1" / "utlsymbollarge.h",
-        "id >= m_MemBlocks.Count()",
-        "id >= static_cast<UtlSymLargeId_t>(m_MemBlocks.Count())",
-    )
+    symbol_table = sdk_root / "public" / "tier1" / "utlsymbollarge.h"
+    for return_value in ("nullptr", "0"):
+        replace_or_verify(
+            symbol_table,
+            "\tif(id == UTL_INVAL_SYMBOL_LARGE || id >= m_MemBlocks.Count())\n"
+            f"\t\treturn {return_value};",
+            "\tif(id == UTL_INVAL_SYMBOL_LARGE || "
+            "id >= static_cast<UtlSymLargeId_t>(m_MemBlocks.Count()))\n"
+            f"\t\treturn {return_value};",
+        )
     replace_or_verify(
         sdk_root / "public" / "tier1" / "memblockallocator.h",
         "page_size = MAX( page_size, m_nPageSize );",

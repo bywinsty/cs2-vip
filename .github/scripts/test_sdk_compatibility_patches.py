@@ -19,7 +19,12 @@ class SdkCompatibilityPatcherTests(unittest.TestCase):
             sdk / "common/network_connection.proto": "message Test {}\n",
             sdk / "public/tier1/keyvalues3.h": "if(initial_size <= NODE::DATA_SIZE)\n",
             sdk / "public/bitvec.h": "if ( this->Base()[i] != ~0 )\n",
-            sdk / "public/tier1/utlsymbollarge.h": "id >= m_MemBlocks.Count()\n",
+            sdk / "public/tier1/utlsymbollarge.h": (
+                "\tif(id == UTL_INVAL_SYMBOL_LARGE || id >= m_MemBlocks.Count())\n"
+                "\t\treturn nullptr;\n"
+                "\tif(id == UTL_INVAL_SYMBOL_LARGE || id >= m_MemBlocks.Count())\n"
+                "\t\treturn 0;\n"
+            ),
             sdk / "public/tier1/memblockallocator.h": "page_size = MAX( page_size, m_nPageSize );\n",
             sdk / "public/tier1/utlhashtable.h": "for ( int i = 0; i < data.Count(); ++i )\n",
             sdk / "public/tier1/generichash.h": "#pragma once\n",
