@@ -23,6 +23,7 @@ def main() -> int:
     for required in (
         "BUILD_ABI", "GLIBC_BASELINE: \"2.28\"",
         "CC: gcc", "CXX: g++", "--max-glibc \"$GLIBC_BASELINE\"",
+        'safe.directory "$GITHUB_WORKSPACE"',
         "--targets x86_64", "actions/cache/restore@", "actions/cache/save@",
         "external/SchemaEntity", "update_release_tag.sh", "SDK_CACHE_MATCHED_KEY",
         "PIP_CACHE_MATCHED_KEY", "prepare-build-tools.outputs.python-version",

@@ -36,17 +36,18 @@ jobs:
         shell: bash
 
     steps:
-      - name: Configure Git defaults
-        run: |
-          git config --global init.defaultBranch Core
-          git config --global advice.defaultBranchName false
-
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Prepare build tools
         id: prepare-build-tools
         uses: ./.github/actions/prepare-build-tools
+
+      - name: Configure container Git
+        run: |
+          git config --global init.defaultBranch Core
+          git config --global advice.defaultBranchName false
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Initialize temporary dependency paths
         run: |
