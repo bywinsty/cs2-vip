@@ -40,6 +40,17 @@ def ensure_timer_destructor(path: Path) -> None:
     write(path, text.replace(needle, needle + "    virtual ~CTimerBase() = default;\n", 1))
 
 
+def ensure_noinline_pattern_scan(path: Path) -> None:
+    old = "CMemory CModule::FindPattern("
+    new = (
+        "#if defined(__GNUC__) && !defined(__clang__)\n"
+        "__attribute__((noinline))\n"
+        "#endif\n"
+        "CMemory CModule::FindPattern("
+    )
+    replace_or_verify(path, old, new)
+
+
 def patch_proto(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     syntax = [line.strip() for line in text.splitlines() if line.strip().startswith("syntax = ")]
@@ -81,6 +92,7 @@ def main() -> int:
     replace_or_verify(schema / "CCSPlayerPawn.h", "FL_PAWN_FAKECLIENT", "FL_BOT")
     replace_or_verify(schema / "CCSPlayerController.h", "FL_CONTROLLER_FAKECLIENT", "FL_FAKECLIENT")
     ensure_timer_destructor(schema / "ctimer.h")
+    ensure_noinline_pattern_scan(schema / "module.cpp")
     if not (sdk_root / "public" / "tier1" / "generichash.h").is_file():
         raise SystemExit("pinned SDK is missing public/tier1/generichash.h")
     if (sdk_root / "tier1" / "generichash.cpp").exists():
