@@ -1,4 +1,7 @@
 #include <stdio.h>
+#include <cctype>
+#include <cstdlib>
+#include <cstring>
 #include "vip.h"
 #include "metamod_oslink.h"
 #include "schemasystem/schemasystem.h"
@@ -18,6 +21,44 @@ std::map<std::string, std::string> g_pKVUser[64];
 KeyValues* g_hKVData;
 
 static constexpr uint64 kSteamID64Base = 76561197960265728ULL;
+
+const char* RuntimeProbeNonce()
+{
+	const char* enabled = std::getenv("VIP_CI_RUNTIME_PROBE");
+	const char* nonce = std::getenv("VIP_CI_RUNTIME_NONCE");
+	if (!enabled || std::strcmp(enabled, "1") != 0 || !nonce || std::strlen(nonce) != 32)
+		return nullptr;
+	for (const char* character = nonce; *character; ++character)
+	{
+		if (!std::isxdigit(static_cast<unsigned char>(*character)))
+			return nullptr;
+	}
+	return nonce;
+}
+
+void EmitRuntimeInterfaceProbe()
+{
+	const char* nonce = RuntimeProbeNonce();
+	if (!nonce)
+		return;
+	int legacyResult = META_IFACE_FAILED;
+	int v2Result = META_IFACE_FAILED;
+	const bool legacy = g_SMAPI->MetaFactory(VIP_INTERFACE_LEGACY, &legacyResult, nullptr) != nullptr && legacyResult != META_IFACE_FAILED;
+	const bool v2 = g_SMAPI->MetaFactory(VIP_INTERFACE_V2, &v2Result, nullptr) != nullptr && v2Result != META_IFACE_FAILED;
+	ConColorMsg(Color(0, 255, 127, 255),
+		"[VIP-CI] {\"event\":\"interfaces\",\"nonce\":\"%s\",\"legacy\":%s,\"v2\":%s}\n",
+		nonce, legacy ? "true" : "false", v2 ? "true" : "false");
+}
+
+void EmitRuntimeReadyProbe()
+{
+	const char* nonce = RuntimeProbeNonce();
+	if (!nonce)
+		return;
+	ConColorMsg(Color(0, 255, 127, 255),
+		"[VIP-CI] {\"event\":\"core_ready\",\"nonce\":\"%s\",\"ready\":true,\"version\":\"%s\"}\n",
+		nonce, g_PLAPI->GetVersion());
+}
 
 uint64 NormalizeSteamID64(uint64 steamID)
 {
@@ -982,6 +1023,7 @@ void VIP::AllPluginsLoaded()
 		return;
 	}
 	g_pMysqlClient = g_SqlInterface->GetMySQLClient();
+	EmitRuntimeInterfaceProbe();
 	
 	g_pPlayers->HookOnClientAuthorized(g_PLID, OnClientAuthorized);
 
@@ -1040,6 +1082,7 @@ CONSTRAINT pk_PlayerID PRIMARY KEY (`account_id`, `sid`) \
 				g_pConnection->Query("ALTER TABLE `vip_users` MODIFY `account_id` BIGINT UNSIGNED NOT NULL;", [this](ISQLQuery* migration) {
 					g_pVIPApi->Call_VIP_OnVIPLoaded();
 					g_pVIPApi->SetReady(true);
+					EmitRuntimeReadyProbe();
 				});
 			});
 		}

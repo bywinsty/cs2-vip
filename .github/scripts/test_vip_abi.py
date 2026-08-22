@@ -33,6 +33,15 @@ class VipAbiContractTests(unittest.TestCase):
         self.assertIn("strcmp(iface, VIP_INTERFACE_V2)", self.factory)
         self.assertIn("static_cast<IVIPApi002*>(g_pVIPCore)", self.factory)
 
+    def test_opt_in_runtime_probe_covers_interfaces_and_ready_state(self):
+        self.assertIn('std::getenv("VIP_CI_RUNTIME_PROBE")', self.factory)
+        self.assertIn('std::getenv("VIP_CI_RUNTIME_NONCE")', self.factory)
+        self.assertIn('"[VIP-CI] {\\"event\\":\\"interfaces\\"', self.factory)
+        self.assertIn('"[VIP-CI] {\\"event\\":\\"core_ready\\"', self.factory)
+        ready = self.factory.index("g_pVIPApi->SetReady(true);")
+        probe = self.factory.index("EmitRuntimeReadyProbe();", ready)
+        self.assertGreater(probe, ready)
+
 
 if __name__ == "__main__":
     unittest.main()
