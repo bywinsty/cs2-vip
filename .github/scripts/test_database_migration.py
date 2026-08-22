@@ -125,10 +125,26 @@ class StaticMigrationContractTests(unittest.TestCase):
 def run_database_cases(args: argparse.Namespace) -> None:
     db = Database(args)
     db.run("SET SESSION sql_mode='STRICT_ALL_TABLES,NO_ZERO_DATE,NO_ZERO_IN_DATE';")
+
+    # A signed INT can contain legacy account IDs, but cannot contain a
+    # SteamID64. Exercise that migration as a legacy-only install first; the
+    # mixed legacy/SteamID64 case below deliberately starts as BIGINT SIGNED.
+    db.reset("(-1, 'legacy-negative', 1, 7, 'vip', 0),"
+             "(42, 'legacy-positive', 3, 8, 'vip', 0),"
+             "(0, 'zero', 4, 9, 'vip', 0)", "INT")
+    db.migrate()
+    if db.run("SELECT account_id,sid FROM vip_users ORDER BY sid;") != (
+            f"{BASE + 4294967295}\t7\n{BASE + 42}\t8\n0\t9"):
+        raise AssertionError("signed INT legacy rows were not normalized")
+    if db.run("SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS "
+              "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='vip_users' "
+              "AND COLUMN_NAME='account_id';").lower() != "bigint unsigned":
+        raise AssertionError("signed INT migration did not finalize account_id")
+
     db.reset("(-1, 'legacy-negative', 1, 7, 'vip', 0),"
              f"({BASE + 4294967295}, 'canonical', 2, 7, 'vip', 0),"
              "(42, 'legacy-positive', 3, 8, 'vip', 0),"
-             "(0, 'zero', 4, 9, 'vip', 0)")
+             "(0, 'zero', 4, 9, 'vip', 0)", "BIGINT SIGNED")
     db.migrate()
     rows = db.run("SELECT account_id,sid FROM vip_users ORDER BY sid;")
     expected = f"{BASE + 4294967295}\t7\n{BASE + 42}\t8\n0\t9"
