@@ -176,14 +176,14 @@ def run_database_cases(args: argparse.Namespace) -> None:
     db.reset("(-1, 'legacy-negative', 1, 7, 'vip', 0),"
              f"({BASE + 4294967295}, 'canonical', 2, 7, 'vip', 0),"
              "(-4294967254, 'negative-legacy', 6, 11, 'vip', 0),"
-             f"({BASE + 42}, 'canonical-42', 7, 11, 'vip', 0),"
+             "(42, 'positive-legacy', 7, 11, 'vip', 0),"
              "(0, 'zero', 4, 9, 'vip', 0),"
              "(9000000000000000000, 'unknown', 5, 10, 'vip', 0)", "BIGINT SIGNED")
     db.migrate()
     if db.run("SELECT account_id,name,sid FROM vip_users ORDER BY sid;") != (
             f"{BASE + 4294967295}\tcanonical\t7\n0\tzero\t9\n"
             "9000000000000000000\tunknown\t10\n"
-            f"{BASE + 42}\tcanonical-42\t11"):
+            f"{BASE + 42}\tpositive-legacy\t11"):
         raise AssertionError("positive legacy representation did not win")
     if db.run("SELECT COUNT(*) FROM vip_users_migration_conflicts;") != "2":
         raise AssertionError("legacy conflict archive was not preserved")
