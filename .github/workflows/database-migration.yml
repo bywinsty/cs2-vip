@@ -1,0 +1,84 @@
+name: Database migration compatibility
+
+on:
+  push:
+    branches:
+      - Core
+      - PR
+      - dev
+  pull_request:
+    branches:
+      - Core
+      - PR
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  migration-helper-contract:
+    name: Compile migration helper contract
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Compile and run header-only migration tests
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -Wall -Wextra -Werror -Iinclude \
+            tests/test_database_migration.cpp -o migration-helper-test
+          ./migration-helper-test
+
+  database:
+    name: ${{ matrix.name }}
+    needs: migration-helper-contract
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: MariaDB 10.3.38
+            image: mariadb:10.3.38@sha256:4045003eaf686df44394cd0c8a75e3b0dd2a0562c08218f89f5077188a9cbf39
+          - name: MariaDB 10.11.18
+            image: mariadb:10.11.18@sha256:161be354206906ea8584929bde5ac59cdce0770fbfd5dd76131429f7dd80aab5
+          - name: MySQL 8.4.8
+            image: mysql:8.4.8@sha256:4fc4bca5a26c5aa2246a92779d238bc2d34f0373e65dc083d7b635b02780dd3d
+    services:
+      database:
+        image: ${{ matrix.image }}
+        env:
+          MARIADB_ROOT_PASSWORD: root
+          MARIADB_DATABASE: vip_test
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: vip_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install MySQL-compatible client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes mariadb-client
+      - name: Wait for database service
+        env:
+          MYSQL_PWD: root
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            if mariadb-admin --protocol=tcp --host=127.0.0.1 --port=3306 --user=root ping; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+      - name: Run migration compatibility cases
+        run: |
+          python .github/scripts/test_database_migration.py \
+            --host 127.0.0.1 --port 3306 --user root --password root --database vip_test

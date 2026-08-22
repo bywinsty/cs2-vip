@@ -1,10 +1,21 @@
 #include <stdio.h>
 #include <cctype>
+#include <charconv>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
+#include <set>
+#include <string_view>
+#include <utility>
+#include <vector>
 #include "vip.h"
+#include "include/vip_database_migration.h"
 #include "metamod_oslink.h"
 #include "schemasystem/schemasystem.h"
+
+#ifndef VIP_BUILD_COMMIT
+#define VIP_BUILD_COMMIT "local"
+#endif
 
 VIP g_VIP;
 PLUGIN_EXPOSE(VIP, g_VIP);
@@ -19,8 +30,6 @@ std::map<std::string, VIPFunctions> g_VipFunctions;
 
 std::map<std::string, std::string> g_pKVUser[64];
 KeyValues* g_hKVData;
-
-static constexpr uint64 kSteamID64Base = 76561197960265728ULL;
 
 const char* RuntimeProbeNonce()
 {
@@ -56,15 +65,8 @@ void EmitRuntimeReadyProbe()
 	if (!nonce)
 		return;
 	ConColorMsg(Color(0, 255, 127, 255),
-		"[VIP-CI] {\"event\":\"core_ready\",\"nonce\":\"%s\",\"ready\":true,\"version\":\"%s\"}\n",
-		nonce, g_PLAPI->GetVersion());
-}
-
-uint64 NormalizeSteamID64(uint64 steamID)
-{
-	if (steamID > 0 && steamID <= UINT32_MAX)
-		return kSteamID64Base + steamID;
-	return steamID;
+		"[VIP-CI] {\"event\":\"core_ready\",\"nonce\":\"%s\",\"ready\":true,\"version\":\"%s\",\"build_commit\":\"%s\"}\n",
+		nonce, g_PLAPI->GetVersion(), VIP_BUILD_COMMIT);
 }
 
 void MigrateLegacyClientData(uint64 steamID)
@@ -93,6 +95,24 @@ int m_iServerID;
 IMySQLClient *g_pMysqlClient;
 IMySQLConnection* g_pConnection;
 
+enum class DatabaseState
+{
+	Disconnected,
+	Connecting,
+	Migrating,
+	Ready,
+	Failed,
+};
+
+DatabaseState g_databaseState = DatabaseState::Disconnected;
+std::set<std::pair<int, uint64>> g_pendingClientAuthorizations;
+bool g_migrationLockHeld = false;
+
+bool DatabaseReady()
+{
+	return g_databaseState == DatabaseState::Ready && g_pConnection != nullptr;
+}
+
 IUtilsApi* g_pUtils;
 IMenusApi* g_pMenus;
 ICookiesApi* g_pCookies;
@@ -112,9 +132,383 @@ CGameEntitySystem* GameEntitySystem()
 	return g_pUtils->GetCGameEntitySystem();
 };
 
-bool containsOnlyDigits(const std::string& str) {
-	return str.find_first_not_of("0123456789") == std::string::npos;
+bool ParseNumericArgument(const char *value, uint64 &result)
+{
+	if (!value)
+		return false;
+	return vip_database::ParseUnsignedDecimal(std::string_view(value), result);
 }
+
+void LoadAuthorizedClient(int iSlot, uint64 steamID);
+
+bool ReadFirstInteger(ISQLQuery *query, int &value)
+{
+	if (!query)
+		return false;
+	ISQLResult *result = query->GetResultSet();
+	if (!result || !result->FetchRow())
+		return false;
+	value = result->GetInt(0);
+	return true;
+}
+
+bool ReadColumnDescription(ISQLQuery *query, std::string &dataType, std::string &columnType)
+{
+	if (!query)
+		return false;
+	ISQLResult *result = query->GetResultSet();
+	if (!result || !result->FetchRow())
+		return false;
+	const char *data = result->GetString(0);
+	const char *column = result->GetString(1);
+	if (!data || !column)
+		return false;
+	dataType = data;
+	columnType = column;
+	return true;
+}
+
+void FailDatabase(const char *stage, const std::string &detail);
+
+void ReleaseMigrationLock(std::function<void()> continuation)
+{
+	if (!g_migrationLockHeld || !g_pConnection)
+	{
+		if (continuation)
+			continuation();
+		return;
+	}
+	g_migrationLockHeld = false;
+	const auto plan = vip_database::BuildMigrationPlan();
+	g_pConnection->ExecuteTransaction(
+		Transaction{std::vector<std::string>{plan.releaseLockQuery}},
+		[continuation](std::vector<ISQLQuery *> results) {
+			int released = 0;
+			if (!results.empty() && ReadFirstInteger(results.front(), released) && released == 1)
+			{
+				if (continuation)
+					continuation();
+				return;
+			}
+			if (g_databaseState == DatabaseState::Migrating)
+				FailDatabase("release-lock", "RELEASE_LOCK did not release the migration lock");
+		},
+		[](std::string error, int queryIndex) {
+			if (g_databaseState == DatabaseState::Migrating)
+			{
+				std::string detail = error.empty() ? "RELEASE_LOCK failed" : error;
+				detail += " (query index " + std::to_string(queryIndex) + ")";
+				FailDatabase("release-lock", detail);
+			}
+		});
+}
+
+void FailDatabase(const char *stage, const std::string &detail)
+{
+	if (g_databaseState == DatabaseState::Failed)
+		return;
+	g_databaseState = DatabaseState::Failed;
+	if (g_pVIPApi)
+		g_pVIPApi->SetReady(false);
+	if (g_pVIPApi)
+	{
+		for (const auto &pending : g_pendingClientAuthorizations)
+			g_pVIPApi->Call_VIP_OnClientLoaded(pending.first, false);
+	}
+	g_pendingClientAuthorizations.clear();
+	if (g_pUtils)
+		g_pUtils->ErrorLog("[VIP] Database migration failed at %s: %s", stage, detail.c_str());
+	else
+		META_CONPRINT("[VIP] Database migration failed\n");
+	ReleaseMigrationLock(nullptr);
+}
+
+void RunMigrationTransaction(const char *stage, std::vector<std::string> queries,
+	std::function<void(const std::vector<ISQLQuery *> &)> success)
+{
+	if (!g_pConnection || g_databaseState != DatabaseState::Migrating)
+	{
+		FailDatabase(stage, "database connection is not available");
+		return;
+	}
+	g_pConnection->ExecuteTransaction(
+		Transaction{std::move(queries)},
+		[success](std::vector<ISQLQuery *> results) {
+			if (g_databaseState != DatabaseState::Migrating)
+				return;
+			if (success)
+				success(results);
+		},
+		[stage](std::string error, int queryIndex) {
+			std::string detail = error.empty() ? "SQLMM transaction failed" : error;
+			detail += " (query index " + std::to_string(queryIndex) + ")";
+			FailDatabase(stage, detail);
+		});
+}
+
+void FinishDatabaseMigration()
+{
+	ReleaseMigrationLock([] {
+		if (g_databaseState != DatabaseState::Migrating)
+			return;
+		g_databaseState = DatabaseState::Ready;
+		g_pVIPApi->SetReady(true);
+		g_pVIPApi->Call_VIP_OnVIPLoaded();
+		EmitRuntimeReadyProbe();
+		const auto pending = g_pendingClientAuthorizations;
+		g_pendingClientAuthorizations.clear();
+		for (const auto &[slot, steamID] : pending)
+			LoadAuthorizedClient(slot, steamID);
+	});
+}
+
+void RecordMigrationVersion()
+{
+	const auto plan = vip_database::BuildMigrationPlan();
+	RunMigrationTransaction("record-version", {plan.recordVersion}, [](const std::vector<ISQLQuery *> &) {
+		FinishDatabaseMigration();
+	});
+}
+
+void VerifyLegacyRows(vip_database::AccountColumnKind columnKind)
+{
+	const auto plan = vip_database::BuildMigrationPlan();
+	RunMigrationTransaction("verify-normalized-ids", {plan.verifyLegacy, plan.warnUnmapped},
+		[columnKind](const std::vector<ISQLQuery *> &results) {
+			int remaining = 0;
+			if (results.empty() || !ReadFirstInteger(results.front(), remaining))
+			{
+				FailDatabase("verify-normalized-ids", "verification result is missing");
+				return;
+			}
+			if (remaining != 0)
+			{
+				FailDatabase("verify-normalized-ids", "legacy account IDs remain after normalization");
+				return;
+			}
+			int unmapped = 0;
+			if (results.size() < 2 || !ReadFirstInteger(results[1], unmapped))
+			{
+				FailDatabase("verify-normalized-ids", "unmapped-ID warning result is missing");
+				return;
+			}
+			if (unmapped > 0 && g_pUtils)
+				g_pUtils->ErrorLog("[VIP] Database migration retained %d account IDs outside the legacy/SteamID64 ranges", unmapped);
+			const auto plan = vip_database::BuildMigrationPlan();
+			if (columnKind != vip_database::AccountColumnKind::UnsignedBigInt)
+			{
+				RunMigrationTransaction("finalize-schema", {plan.finalizeUnsignedColumn}, [](const std::vector<ISQLQuery *> &) {
+					RecordMigrationVersion();
+				});
+				return;
+			}
+			RecordMigrationVersion();
+		});
+}
+
+void NormalizeLegacyRows(vip_database::AccountColumnKind columnKind)
+{
+	const auto plan = vip_database::BuildMigrationPlan();
+	RunMigrationTransaction("normalize-legacy-ids",
+		{plan.archiveConflicts[0], plan.archiveConflicts[1], plan.removeConflicts[0],
+		 plan.removeConflicts[1], plan.normalizeLegacy},
+		[columnKind](const std::vector<ISQLQuery *> &) {
+			VerifyLegacyRows(columnKind);
+		});
+}
+
+void InspectDatabaseSchema()
+{
+	RunMigrationTransaction(
+		"inspect-schema",
+		{"SELECT `DATA_TYPE`, `COLUMN_TYPE` FROM `INFORMATION_SCHEMA`.`COLUMNS` "
+		 "WHERE `TABLE_SCHEMA` = DATABASE() AND `TABLE_NAME` = 'vip_users' "
+		 "AND `COLUMN_NAME` = 'account_id';"},
+		[](const std::vector<ISQLQuery *> &results) {
+			std::string dataType;
+			std::string columnType;
+			if (results.empty() || !ReadColumnDescription(results.front(), dataType, columnType))
+			{
+				FailDatabase("inspect-schema", "account_id column is missing");
+				return;
+			}
+			const auto kind = vip_database::ClassifyAccountColumn(dataType, columnType);
+			if (kind == vip_database::AccountColumnKind::Unknown)
+			{
+				FailDatabase("inspect-schema", "unsupported account_id column type: " + columnType);
+				return;
+			}
+			const auto plan = vip_database::BuildMigrationPlan();
+			if (vip_database::IsLegacyWidth(kind))
+			{
+				RunMigrationTransaction("widen-signed-column", {plan.widenSignedColumn}, [kind](const std::vector<ISQLQuery *> &) {
+					NormalizeLegacyRows(kind);
+				});
+				return;
+			}
+			if (kind == vip_database::AccountColumnKind::SignedBigInt)
+			{
+				NormalizeLegacyRows(kind);
+				return;
+			}
+			NormalizeLegacyRows(kind);
+		});
+}
+
+void StartDatabaseMigration()
+{
+	g_databaseState = DatabaseState::Migrating;
+	const auto plan = vip_database::BuildMigrationPlan();
+	RunMigrationTransaction("acquire-lock", {plan.lockQuery}, [](const std::vector<ISQLQuery *> &results) {
+		int acquired = 0;
+		if (results.empty() || !ReadFirstInteger(results.front(), acquired) || acquired != 1)
+		{
+			FailDatabase("acquire-lock", "another server owns the migration lock or GET_LOCK failed");
+			return;
+		}
+		g_migrationLockHeld = true;
+		const auto plan = vip_database::BuildMigrationPlan();
+		RunMigrationTransaction("create-users-table", {plan.createUsers}, [plan](const std::vector<ISQLQuery *> &) {
+			RunMigrationTransaction("create-migration-history", {plan.createHistory}, [plan](const std::vector<ISQLQuery *> &) {
+				RunMigrationTransaction("create-conflict-archive", {plan.createConflicts}, [](const std::vector<ISQLQuery *> &) {
+					InspectDatabaseSchema();
+				});
+			});
+		});
+	});
+}
+
+std::string JsonEscape(std::string_view value)
+{
+	std::string escaped;
+	escaped.reserve(value.size());
+	for (const unsigned char character : value)
+	{
+		switch (character)
+		{
+			case '\\': escaped += "\\\\"; break;
+			case '"': escaped += "\\\""; break;
+			case '\b': escaped += "\\b"; break;
+			case '\f': escaped += "\\f"; break;
+			case '\n': escaped += "\\n"; break;
+			case '\r': escaped += "\\r"; break;
+			case '\t': escaped += "\\t"; break;
+			default:
+				if (character >= 0x20)
+					escaped.push_back(static_cast<char>(character));
+				break;
+		}
+	}
+	return escaped;
+}
+
+bool ValidRuntimeNonce(std::string_view nonce)
+{
+	if (nonce.size() != 32)
+		return false;
+	for (const unsigned char character : nonce)
+	{
+		if (!std::isxdigit(character))
+			return false;
+	}
+	return true;
+}
+
+bool WriteRuntimeEvidence(const std::string &nonce, const std::string &columnType,
+	bool legacyInterface, bool v2Interface)
+{
+	const std::string finalPath = "addons/data/vip-runtime-validation-" + nonce + ".json";
+	const std::string temporaryPath = finalPath + ".tmp";
+	std::string evidence =
+		"{\n"
+		"  \"schema\": \"https://github.com/bywinsty/cs2-vip/runtime-probe/v1\",\n"
+		"  \"nonce\": \"" + nonce + "\",\n"
+		"  \"build_commit\": \"" VIP_BUILD_COMMIT "\",\n"
+		"  \"version\": \"" + JsonEscape(g_PLAPI->GetVersion()) + "\",\n"
+		"  \"interfaces\": {\"IVIPApi001\": " + (legacyInterface ? std::string("true") : std::string("false")) +
+		", \"IVIPApi002\": " + (v2Interface ? std::string("true") : std::string("false")) + "},\n"
+		"  \"ready\": true,\n"
+		"  \"migration\": {\"status\": \"ready\", \"account_id_type\": \"" + JsonEscape(columnType) + "\"}\n"
+		"}\n";
+	FileHandle_t output = g_pFullFileSystem->Open(temporaryPath.c_str(), "wb", "GAME");
+	if (!output)
+		return false;
+	const int written = g_pFullFileSystem->Write(evidence.data(), static_cast<int>(evidence.size()), output);
+	g_pFullFileSystem->Close(output);
+	if (written != static_cast<int>(evidence.size()))
+	{
+		g_pFullFileSystem->RemoveFile(temporaryPath.c_str(), "GAME");
+		return false;
+	}
+	if (!g_pFullFileSystem->RenameFile(temporaryPath.c_str(), finalPath.c_str(), "GAME"))
+	{
+		g_pFullFileSystem->RemoveFile(temporaryPath.c_str(), "GAME");
+		return false;
+	}
+	return true;
+}
+
+void RuntimeProbeCommand(const CCommandContext &context, const CCommand &args)
+{
+	if (context.GetPlayerSlot().Get() >= 0)
+	{
+		META_CONPRINT("[VIP-CI] vip_runtime_probe is server-console-only\n");
+		return;
+	}
+	if (args.ArgC() != 2 || !ValidRuntimeNonce(args[1]))
+	{
+		META_CONPRINT("[VIP-CI] Usage: vip_runtime_probe <32-hex-nonce>\n");
+		return;
+	}
+	if (!DatabaseReady())
+	{
+		META_CONPRINT("[VIP-CI] Runtime probe rejected: database is not ready\n");
+		return;
+	}
+
+	const std::string nonce(args[1]);
+	g_pConnection->ExecuteTransaction(
+		Transaction{std::vector<std::string>{
+			"SELECT `COLUMN_TYPE` FROM `INFORMATION_SCHEMA`.`COLUMNS` "
+			"WHERE `TABLE_SCHEMA` = DATABASE() AND `TABLE_NAME` = 'vip_users' "
+			"AND `COLUMN_NAME` = 'account_id';"}},
+		[nonce](std::vector<ISQLQuery *> results) {
+			if (!DatabaseReady() || results.empty() || !results.front())
+				return;
+			ISQLResult *result = results.front()->GetResultSet();
+			if (!result || !result->FetchRow())
+				return;
+			const char *rawColumnType = result->GetString(0);
+			if (!rawColumnType)
+				return;
+			const std::string columnType = vip_database::LowerAscii(rawColumnType);
+			if (columnType != "bigint unsigned")
+			{
+				META_CONPRINT("[VIP-CI] Runtime probe rejected: account_id is not BIGINT UNSIGNED\n");
+				return;
+			}
+			int legacyResult = META_IFACE_FAILED;
+			int v2Result = META_IFACE_FAILED;
+			const bool legacy = g_SMAPI->MetaFactory(VIP_INTERFACE_LEGACY, &legacyResult, nullptr) != nullptr
+				&& legacyResult != META_IFACE_FAILED;
+			const bool v2 = g_SMAPI->MetaFactory(VIP_INTERFACE_V2, &v2Result, nullptr) != nullptr
+				&& v2Result != META_IFACE_FAILED;
+			if (!legacy || !v2 || !WriteRuntimeEvidence(nonce, columnType, legacy, v2))
+				META_CONPRINT("[VIP-CI] Runtime probe evidence was not written\n");
+			else
+				META_CONPRINTF("[VIP-CI] Runtime probe evidence ready for nonce %s\n", nonce.c_str());
+		},
+		[](std::string error, int queryIndex) {
+			META_CONPRINTF("[VIP-CI] Runtime probe SQL failed at query %d: %s\n", queryIndex, error.c_str());
+		});
+}
+
+ConCommand g_RuntimeProbeCommand(
+	"vip_runtime_probe",
+	RuntimeProbeCommand,
+	"Write nonce-bound VIP runtime validation evidence (server console only)",
+	FCVAR_SERVER_CAN_EXECUTE
+);
 
 void VIPApi::VIP_PrintToCenter(int Slot, const char *msg, ...)
 {
@@ -208,13 +602,18 @@ CON_COMMAND_F(vip_reload, "reloads list of vip groups", FCVAR_NONE)
 
 CON_COMMAND_F(mm_reload_vip, "check player vip", FCVAR_NONE)
 {
+	if (!DatabaseReady())
+	{
+		META_CONPRINT("[VIP] Database is not ready\n");
+		return;
+	}
 	if (args.ArgC() > 1 && args[1][0])
 	{
 		bool bFound = false;
 		CCSPlayerController* pController;
 		int iSlot = 0;
-		const bool bNumericTarget = containsOnlyDigits(args[1]);
-		const uint64 iNumericTarget = bNumericTarget ? std::stoull(args[1]) : 0;
+		uint64 iNumericTarget = 0;
+		const bool bNumericTarget = ParseNumericArgument(args[1], iNumericTarget);
 		for (int i = 0; i < 64; i++)
 		{
 			pController = CCSPlayerController::FromSlot(i);
@@ -279,12 +678,17 @@ CON_COMMAND_F(mm_reload_vip, "check player vip", FCVAR_NONE)
 
 CON_COMMAND_F(vip_remove, "remove player vip", FCVAR_NONE)
 {	
+	if (!DatabaseReady())
+	{
+		META_CONPRINT("[VIP] Database is not ready\n");
+		return;
+	}
 	if (args.ArgC() > 1 && args[1][0])
 	{
 		bool bFound = false;
 		int iSlot = 0; 
-		const bool bNumericTarget = containsOnlyDigits(args[1]);
-		const uint64 iNumericTarget = bNumericTarget ? std::stoull(args[1]) : 0;
+		uint64 iNumericTarget = 0;
+		const bool bNumericTarget = ParseNumericArgument(args[1], iNumericTarget);
 		for (int i = 0; i < 64; i++)
 		{
 			CCSPlayerController* pController = CCSPlayerController::FromSlot(i);
@@ -317,12 +721,23 @@ CON_COMMAND_F(vip_remove, "remove player vip", FCVAR_NONE)
 
 CON_COMMAND_F(vip_give, "give player vip", FCVAR_NONE)
 {	
-	if (args.ArgC() > 3 && args[1][0] && containsOnlyDigits(args[2]) && args[3][0])
+	if (!DatabaseReady())
 	{
+		META_CONPRINT("[VIP] Database is not ready\n");
+		return;
+	}
+	if (args.ArgC() > 3 && args[1][0] && args[3][0])
+	{
+		uint64 durationSeconds = 0;
+		if (!ParseNumericArgument(args[2], durationSeconds) || durationSeconds > static_cast<uint64>(std::numeric_limits<int>::max()))
+		{
+			META_CONPRINT("[VIP] Invalid duration\n");
+			return;
+		}
 		bool bFound = false;
 		int iSlot = 0;
-		const bool bNumericTarget = containsOnlyDigits(args[1]);
-		const uint64 iNumericTarget = bNumericTarget ? std::stoull(args[1]) : 0;
+		uint64 iNumericTarget = 0;
+		const bool bNumericTarget = ParseNumericArgument(args[1], iNumericTarget);
 		for (int i = 0; i < 64; i++)
 		{
 			CCSPlayerController* pController = CCSPlayerController::FromSlot(i);
@@ -347,15 +762,21 @@ CON_COMMAND_F(vip_give, "give player vip", FCVAR_NONE)
 				META_CONPRINT("[VIP] The player already has VIP status\n");
 			else
 			{
-				g_pVIPCore->VIP_GiveClientVIP(iSlot, atoi(args[2]), args[3], true);
+				g_pVIPCore->VIP_GiveClientVIP(iSlot, static_cast<int>(durationSeconds), args[3], true);
 				META_CONPRINT("[VIP] You have successfully granted VIP status\n");
 			}
 		}
 		else if(std::strlen(args[1]) >= 9 && std::strlen(args[1]) <= 20)
 		{
-			uint64 accountID = NormalizeSteamID64(std::stoull(args[1]));
+			uint64 accountID = 0;
+			if (!vip_database::ParseAccountIdentifier(std::string_view(args[1]), accountID))
+			{
+				META_CONPRINT("[VIP] Invalid account ID\n");
+				return;
+			}
+			accountID = vip_database::NormalizeSteamID64(accountID);
 			char szQuery[256];
-			g_SMAPI->Format(szQuery, sizeof(szQuery), "INSERT INTO `vip_users` (`account_id`, `name`, `lastvisit`, `sid`, `group`, `expires`) VALUES ('%llu', '%s', '%i', '%i', '%s', '%i');", static_cast<unsigned long long>(accountID), "none", std::time(0), m_iServerID, args[3], atoi(args[2]) != 0?std::time(0)+atoi(args[2]):0);
+			g_SMAPI->Format(szQuery, sizeof(szQuery), "INSERT INTO `vip_users` (`account_id`, `name`, `lastvisit`, `sid`, `group`, `expires`) VALUES ('%llu', '%s', '%i', '%i', '%s', '%i');", static_cast<unsigned long long>(accountID), "none", std::time(0), m_iServerID, args[3], durationSeconds != 0 ? std::time(0) + static_cast<int>(durationSeconds) : 0);
 			g_pConnection->Query(szQuery, [](ISQLQuery* test){});
 			META_CONPRINT("[VIP] You have successfully granted VIP status\n");
 		}
@@ -475,7 +896,13 @@ bool VIP::Unload(char *error, size_t maxlen)
 	ConVar_Unregister();
 
 	if (g_pConnection)
+	{
 		g_pConnection->Destroy();
+		g_pConnection = nullptr;
+	}
+	g_databaseState = DatabaseState::Disconnected;
+	if (g_pVIPApi)
+		g_pVIPApi->SetReady(false);
 	
 	return true;
 }
@@ -519,7 +946,7 @@ void OnStartupServer()
 		bDone = true;
 	}
 	
-	if(g_pConnection)
+	if(DatabaseReady())
 	{
 		char szQuery[256];
 		g_SMAPI->Format(szQuery, sizeof(szQuery), "DELETE FROM `vip_users` WHERE `sid` = %i AND `expires` < %i AND `expires` <> 0;", m_iServerID, std::time(0));
@@ -560,9 +987,12 @@ void VIP::GameFrame(bool simulating, bool bFirstTick, bool bLastTick)
 				g_pUtils->PrintToChat(i, g_pVIPCore->VIP_GetTranslate("VIPExpired2"));
 				g_pUtils->PrintToChat(i, g_pVIPCore->VIP_GetTranslate("VIPExpired3"));
 				
-				char szQuery[256];
-				g_SMAPI->Format(szQuery, sizeof(szQuery), "DELETE FROM `vip_users` WHERE `account_id` = '%llu' AND `sid` = %i;", static_cast<unsigned long long>(m_steamID), m_iServerID);
-				g_pConnection->Query(szQuery, [this](ISQLQuery* test){});
+				if (DatabaseReady())
+				{
+					char szQuery[256];
+					g_SMAPI->Format(szQuery, sizeof(szQuery), "DELETE FROM `vip_users` WHERE `account_id` = '%llu' AND `sid` = %i;", static_cast<unsigned long long>(m_steamID), m_iServerID);
+					g_pConnection->Query(szQuery, [this](ISQLQuery* test){});
+				}
 			}
 		}
 	}
@@ -626,6 +1056,7 @@ int VIPApi::VIP_GetClientAccessTime(int iSlot)
 
 bool VIPApi::VIP_SetClientAccessTime(int iSlot, int iTime, bool bInDB)
 {
+	if (bInDB && !DatabaseReady()) return false;
 	if(g_pPlayers->IsFakeClient(iSlot)) return false;
 	CCSPlayerController* pController = CCSPlayerController::FromSlot(iSlot);
 	if (!pController) return false;
@@ -649,6 +1080,7 @@ bool VIPApi::VIP_SetClientAccessTime(int iSlot, int iTime, bool bInDB)
 
 bool VIPApi::VIP_GiveClientVIP(int iSlot, int iTime, const char* szGroup, bool bAddToDB)
 {
+	if (bAddToDB && !DatabaseReady()) return false;
 	if(g_pPlayers->IsFakeClient(iSlot)) return false;
 	CCSPlayerController* pController = CCSPlayerController::FromSlot(iSlot);
 	if (!pController) return false;
@@ -682,6 +1114,7 @@ bool VIPApi::VIP_GiveClientVIP(int iSlot, int iTime, const char* szGroup, bool b
 
 bool VIPApi::VIP_RemoveClientVIP(int iSlot, bool bNotify, bool bInDB)
 {
+	if (bInDB && !DatabaseReady()) return false;
 	CCSPlayerController* pController = CCSPlayerController::FromSlot(iSlot);
 	if (!pController) return false;
 	uint64 m_steamID = pController->m_steamID();
@@ -711,6 +1144,7 @@ bool VIPApi::VIP_RemoveClientVIP(int iSlot, bool bNotify, bool bInDB)
 
 bool VIPApi::VIP_SetClientVIPGroup(int iSlot, const char* szGroup, bool bInDB)
 {
+	if (bInDB && !DatabaseReady()) return false;
 	CCSPlayerController* pController = CCSPlayerController::FromSlot(iSlot);
 	if (!pController) return false;
 	uint64 m_steamID = pController->m_steamID();
@@ -840,12 +1274,13 @@ bool VIPApi::VIP_IsValidVIPGroup(const char* szGroup)
 	return g_VipGroups[szGroup].empty()?false:true;
 }
 
-void OnClientAuthorized(int iSlot, uint64 iSteamID64)
+void LoadAuthorizedClient(int iSlot, uint64 iSteamID64)
 {
 	CCSPlayerController* pController = CCSPlayerController::FromSlot(iSlot);
 	if (!pController) return;
 	uint64 m_steamID = pController->m_steamID();
 	if(m_steamID == 0) return;
+	if (iSteamID64 != 0 && iSteamID64 != m_steamID) return;
 	auto vipGroup = g_VipPlayer.find(m_steamID);
 	if (vipGroup != g_VipPlayer.end())
 		g_VipPlayer.erase(vipGroup);
@@ -855,6 +1290,14 @@ void OnClientAuthorized(int iSlot, uint64 iSteamID64)
 	g_SMAPI->Format(szQuery, sizeof(szQuery), "SELECT `group`, `expires` FROM `vip_users` WHERE `account_id` IN (%llu, %u) AND `sid` = %d ORDER BY `account_id` = %llu DESC LIMIT 1;", static_cast<unsigned long long>(m_steamID), legacySteamID, m_iServerID, static_cast<unsigned long long>(m_steamID));
 	g_pConnection->Query(szQuery, [iSlot, m_steamID, legacySteamID](ISQLQuery* test)
 	{
+		CCSPlayerController* currentController = CCSPlayerController::FromSlot(iSlot);
+		if (!currentController || currentController->m_steamID() != m_steamID)
+			return;
+		if (!DatabaseReady())
+		{
+			g_pVIPApi->Call_VIP_OnClientLoaded(iSlot, false);
+			return;
+		}
 		auto results = test->GetResultSet();
 		if(results->FetchRow())
 		{
@@ -873,8 +1316,28 @@ void OnClientAuthorized(int iSlot, uint64 iSteamID64)
 	});
 }
 
+void OnClientAuthorized(int iSlot, uint64 iSteamID64)
+{
+	if (!DatabaseReady())
+	{
+		if (g_databaseState == DatabaseState::Failed)
+			g_pVIPApi->Call_VIP_OnClientLoaded(iSlot, false);
+		else
+			g_pendingClientAuthorizations.emplace(iSlot, iSteamID64);
+		return;
+	}
+	LoadAuthorizedClient(iSlot, iSteamID64);
+}
+
 void VIP::OnClientDisconnect( CPlayerSlot slot, ENetworkDisconnectionReason reason, const char *pszName, uint64 xuid, const char *pszNetworkID )
 {
+	for (auto pending = g_pendingClientAuthorizations.begin(); pending != g_pendingClientAuthorizations.end(); )
+	{
+		if (pending->first == slot.Get())
+			pending = g_pendingClientAuthorizations.erase(pending);
+		else
+			++pending;
+	}
 	if (xuid == 0)
     	return;
 
@@ -978,6 +1441,8 @@ bool OnVIPCommand(int iSlot, const char* szContent)
 
 void OnClientCookiesLoaded(int iSlot)
 {
+	if (!DatabaseReady())
+		return;
 	g_pVIPApi->Call_VIP_OnClientLoaded(iSlot, g_pVIPCore->VIP_IsClientVIP(iSlot));
 }
 
@@ -1053,12 +1518,14 @@ void VIP::AllPluginsLoaded()
 	if (!pKVConfig->LoadFromFile(g_pFullFileSystem, "addons/configs/databases.cfg")) {
 		g_pUtils->ErrorLog("[%s] Failed to load databases config 'addons/config/databases.cfg'", g_PLAPI->GetLogTag());
 		ConColorMsg(Color(255, 0, 0, 255), "[VIP] %s\n", error);
+		FailDatabase("config", "databases.cfg could not be loaded");
 		return;
 	}
 
 	pKVConfig = pKVConfig->FindKey("vip", false);
 	if (!pKVConfig) {
 		g_pUtils->ErrorLog("[%s] No databases.cfg 'vip'", g_PLAPI->GetLogTag());
+		FailDatabase("config", "databases.cfg has no vip section");
 		return;
 	}
 
@@ -1068,30 +1535,25 @@ void VIP::AllPluginsLoaded()
 	info.pass = pKVConfig->GetString("pass", nullptr);
 	info.database = pKVConfig->GetString("database", nullptr);
 	info.port = pKVConfig->GetInt("port");
+	g_databaseState = DatabaseState::Connecting;
+	if (!g_pMysqlClient)
+	{
+		FailDatabase("connect", "SQLMM did not provide a MySQL client");
+		return;
+	}
 	g_pConnection = g_pMysqlClient->CreateMySQLConnection(info);
+	if (!g_pConnection)
+	{
+		FailDatabase("connect", "SQLMM could not create a database connection");
+		return;
+	}
 
 	g_pConnection->Connect([this](bool connect) {
 		if (!connect) {
-			META_CONPRINT("Failed to connect the mysql database\n");
-		} else {
-			g_pConnection->Query("CREATE TABLE IF NOT EXISTS `vip_users` (\
-`account_id` BIGINT UNSIGNED NOT NULL, \
-`name` VARCHAR(64) NOT NULL default 'unknown' COLLATE 'utf8mb4_unicode_ci', \
-`lastvisit` INT UNSIGNED NOT NULL default 0, \
-`sid` INT UNSIGNED NOT NULL, \
-`group` VARCHAR(64) NOT NULL, \
-`expires` INT UNSIGNED NOT NULL default 0, \
-CONSTRAINT pk_PlayerID PRIMARY KEY (`account_id`, `sid`) \
-) DEFAULT CHARSET=utf8mb4;", [this](ISQLQuery* test) {
-				// Existing installations may still have the legacy INT column.
-				// Widen it before the first full SteamID64 lookup.
-				g_pConnection->Query("ALTER TABLE `vip_users` MODIFY `account_id` BIGINT UNSIGNED NOT NULL;", [this](ISQLQuery* migration) {
-					g_pVIPApi->Call_VIP_OnVIPLoaded();
-					g_pVIPApi->SetReady(true);
-					EmitRuntimeReadyProbe();
-				});
-			});
+			FailDatabase("connect", "SQLMM could not connect to the configured database");
+			return;
 		}
+		StartDatabaseMigration();
 	});
 	g_pUtils->RegCommand(g_PLID, {"mm_vip", "sm_vip"}, {"!vip"}, OnVIPCommand);
 	g_pUtils->HookEvent(g_PLID, "player_spawn", OnPlayerSpawn);

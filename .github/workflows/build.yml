@@ -9,12 +9,15 @@ on:
   pull_request:
     branches:
       - Core
+      - PR
+      - dev
   workflow_dispatch:
 
 permissions:
   contents: read
 
 env:
+  VIP_BUILD_COMMIT: ${{ github.sha }}
   AMBUILD_REF: "d89ec91a7ac2607da07b50bb62346f9a10e9a998"
   MMS_REF: "2667e8e5947237c4cb7ea45cec3913ad6a44757c"
   HL2SDK_REF: "80cf8554d716a3841fe0680013cae3411a056a8d"
@@ -29,7 +32,6 @@ env:
 jobs:
   build:
     name: Build VIP Core
-    if: "!contains(github.event.head_commit.message || '', '[skip ci]')"
     runs-on: ubuntu-24.04
     container:
       image: quay.io/pypa/manylinux_2_28_x86_64@sha256:0c87ccb5996dab6c3b7612ee4fda7b80c4ab3c44a86c2541e4a872afdf4f131b
@@ -75,6 +77,9 @@ jobs:
 
       - name: Test SPDX SBOM generator
         run: python .github/scripts/test_generate_spdx_sbom.py
+
+      - name: Test SDK compatibility patcher
+        run: python .github/scripts/test_sdk_compatibility_patches.py
 
       - name: Test runtime harness safety
         run: python .github/scripts/test_runtime_validate.py
@@ -184,6 +189,20 @@ jobs:
             --manifest-path "$manifest_path/manifests/cs2.json" \
             --schema-root "$SCHEMA_ROOT" \
             --require-include public/game/server
+          python .github/scripts/hash_file_tree.py \
+            --exclude .git \
+            "$HL2SDK_ROOT/hl2sdk-cs2" "$SCHEMA_ROOT" "$manifest_path" \
+            > "$RUNNER_TEMP/sdk-patched-first.sha256"
+          python .github/scripts/apply_sdk_compatibility_patches.py \
+            --sdk-root "$HL2SDK_ROOT/hl2sdk-cs2" \
+            --manifest-path "$manifest_path/manifests/cs2.json" \
+            --schema-root "$SCHEMA_ROOT" \
+            --require-include public/game/server
+          python .github/scripts/hash_file_tree.py \
+            --exclude .git \
+            "$HL2SDK_ROOT/hl2sdk-cs2" "$SCHEMA_ROOT" "$manifest_path" \
+            > "$RUNNER_TEMP/sdk-patched-second.sha256"
+          cmp "$RUNNER_TEMP/sdk-patched-first.sha256" "$RUNNER_TEMP/sdk-patched-second.sha256"
           test -f "$manifest_path/SdkHelpers.ambuild"
           test -f "$manifest_path/manifests/cs2.json"
           test -f "$SCHEMA_ROOT/schemasystem.cpp"
@@ -292,28 +311,21 @@ jobs:
             --repository "$GITHUB_REPOSITORY" \
             --archive "$RUNNER_TEMP/vip.zip" \
             --root build/package \
-            --requirements .github/ci-requirements.txt \
-            --git-dependency "AMBuild=https://github.com/alliedmodders/ambuild#$AMBUILD_REF" \
-            --git-dependency "Metamod-Source=https://github.com/alliedmodders/metamod-source#$MMS_REF" \
-            --git-dependency "HL2SDK-CS2=https://github.com/alliedmodders/hl2sdk#$HL2SDK_REF" \
-            --git-dependency "HL2SDK-Manifests=https://github.com/alliedmodders/hl2sdk-manifests#$MANIFEST_REF" \
-            --git-dependency "SchemaEntity=https://github.com/pisex/SchemaEntity#$SCHEMAENTITY_REF" \
+            --dependency-manifest .github/dependency-manifest.json \
             --output "$RUNNER_TEMP/vip.spdx.json"
           python .github/scripts/verify_spdx_subject.py \
             --archive "$RUNNER_TEMP/vip.zip" \
             --sbom "$RUNNER_TEMP/vip.spdx.json"
+          python .github/scripts/verify_spdx_dependencies.py \
+            --sbom "$RUNNER_TEMP/vip.spdx.json" \
+            --manifest .github/dependency-manifest.json
           python .github/scripts/generate_spdx_sbom.py \
             --name cs2-vip \
             --version "$GITHUB_SHA" \
             --repository "$GITHUB_REPOSITORY" \
             --archive "$RUNNER_TEMP/vip.zip" \
             --root build/package \
-            --requirements .github/ci-requirements.txt \
-            --git-dependency "AMBuild=https://github.com/alliedmodders/ambuild#$AMBUILD_REF" \
-            --git-dependency "Metamod-Source=https://github.com/alliedmodders/metamod-source#$MMS_REF" \
-            --git-dependency "HL2SDK-CS2=https://github.com/alliedmodders/hl2sdk#$HL2SDK_REF" \
-            --git-dependency "HL2SDK-Manifests=https://github.com/alliedmodders/hl2sdk-manifests#$MANIFEST_REF" \
-            --git-dependency "SchemaEntity=https://github.com/pisex/SchemaEntity#$SCHEMAENTITY_REF" \
+            --dependency-manifest .github/dependency-manifest.json \
             --output "$RUNNER_TEMP/vip.repro.spdx.json"
           cmp "$RUNNER_TEMP/vip.spdx.json" "$RUNNER_TEMP/vip.repro.spdx.json"
 

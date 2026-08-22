@@ -1,6 +1,6 @@
 # vim: set sts=2 ts=8 sw=2 tw=99 et ft=python:
 import datetime
-import os, sys
+import os, re, sys
 
 def ResolveEnvPath(env, folder):
   if env in os.environ:
@@ -63,6 +63,9 @@ class MMSPluginConfig(object):
     self.build_date = datetime.datetime.fromtimestamp(
       int(source_date_epoch), datetime.timezone.utc
     ).strftime('%Y-%m-%d')
+    self.build_commit = os.environ.get('VIP_BUILD_COMMIT', 'local')
+    if self.build_commit != 'local' and not re.fullmatch(r'[0-9a-f]{40}', self.build_commit):
+      raise Exception('VIP_BUILD_COMMIT must be "local" or a lowercase 40-character commit SHA')
     self.all_targets = []
     self.target_archs = set()
 
@@ -160,6 +163,7 @@ class MMSPluginConfig(object):
       # headers and would silently raise the release ABI baseline.
       cxx.defines += ['_FORTIFY_SOURCE=2']
       cxx.defines += ['VIP_BUILD_DATE=\"{}\"'.format(self.build_date)]
+      cxx.defines += ['VIP_BUILD_COMMIT=\"{}\"'.format(self.build_commit)]
 
       cxx.cxxflags += ['-std=c++17']
       if (cxx.version >= 'gcc-4.0') or cxx.family == 'clang':

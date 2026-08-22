@@ -14,30 +14,56 @@ def write(path: Path, text: str) -> None:
 
 def ensure_include(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
-    if '#include "gametrace.h"' in text:
+    source = '#include "schemasystem.h"\n'
+    patched = '#include "gametrace.h"\n'
+    source_count = text.count(source)
+    patched_count = text.count(patched)
+    if patched_count == 1 and source_count == 1:
         return
-    needle = '#include "schemasystem.h"\n'
-    if needle not in text:
-        raise SystemExit(f"expected schemasystem include not found: {path}")
-    write(path, text.replace(needle, needle + '#include "gametrace.h"\n', 1))
+    if patched_count != 0 or source_count != 1:
+        raise SystemExit(
+            f"expected exactly one original or patched include state in {path}: "
+            f"source={source_count}, patched={patched_count}"
+        )
+    write(path, text.replace(source, source + patched, 1))
 
 
 def replace_or_verify(path: Path, old: str, new: str) -> None:
     text = path.read_text(encoding="utf-8")
-    if old in text:
-        write(path, text.replace(old, new))
-    elif new not in text:
-        raise SystemExit(f"compatibility pattern not found in {path}: {old}")
+    patched_count = text.count(new)
+    if patched_count == 1:
+        # Some patched forms intentionally contain the source pattern (for
+        # example the noinline prefix). Remove the one complete patched form
+        # before looking for a mixed original+patched state.
+        residual = text.replace(new, "", 1)
+        if old in residual:
+            raise SystemExit(f"mixed original and patched compatibility patterns in {path}: {old}")
+        return
+    if patched_count > 1:
+        raise SystemExit(f"duplicate patched compatibility pattern in {path}: {new}")
+    original_count = text.count(old)
+    if original_count != 1:
+        raise SystemExit(
+            f"expected exactly one original or patched compatibility pattern in {path}: "
+            f"original={original_count}, patched={patched_count}"
+        )
+    write(path, text.replace(old, new, 1))
 
 
 def ensure_timer_destructor(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
-    if "virtual ~CTimerBase()" in text:
+    destructor = "    virtual ~CTimerBase() = default;\n"
+    declaration = "class CTimerBase {\npublic:\n"
+    destructor_count = text.count(destructor)
+    declaration_count = text.count(declaration)
+    if destructor_count == 1 and declaration_count == 1:
         return
-    needle = "class CTimerBase {\npublic:\n"
-    if needle not in text:
-        raise SystemExit(f"CTimerBase declaration not found: {path}")
-    write(path, text.replace(needle, needle + "    virtual ~CTimerBase() = default;\n", 1))
+    if destructor_count != 0 or declaration_count != 1:
+        raise SystemExit(
+            f"expected exactly one original or patched CTimerBase state in {path}: "
+            f"declaration={declaration_count}, destructor={destructor_count}"
+        )
+    write(path, text.replace(declaration, declaration + destructor, 1))
 
 
 def ensure_noinline_pattern_scan(path: Path) -> None:
