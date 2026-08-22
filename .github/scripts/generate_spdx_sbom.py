@@ -11,6 +11,8 @@ import os
 from pathlib import Path
 import re
 
+from safe_file_tree import UnsafeTreeError, collect_regular_files, is_link_like, validate_archive_output
+
 
 def checksum(path: Path, algorithm: str) -> str:
     digest = hashlib.new(algorithm)
@@ -83,11 +85,9 @@ def parse_git_dependency(value: str) -> tuple[str, str, str]:
 
 def build_document(args: argparse.Namespace) -> dict:
     archive = args.archive.resolve()
-    root = args.root.resolve()
-    if not archive.is_file() or not root.is_dir():
+    if not archive.is_file() or is_link_like(archive):
         raise ValueError("archive and package root must exist")
-
-    files = sorted(path for path in root.rglob("*") if path.is_file())
+    root, files = collect_regular_files(args.root)
     if not files:
         raise ValueError("package root contains no files")
     spdx_files: list[dict] = []
@@ -209,14 +209,14 @@ def main() -> int:
     )
     args = parser.parse_args()
     try:
+        args.output = validate_archive_output(args.root.resolve(strict=True), args.output)
         document = build_document(args)
-        args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(
             json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
             encoding="utf-8",
             newline="\n",
         )
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, UnsafeTreeError, json.JSONDecodeError) as exc:
         raise SystemExit(f"SBOM generation failed: {exc}")
     print(f"SPDX SBOM written: {args.output}")
     return 0

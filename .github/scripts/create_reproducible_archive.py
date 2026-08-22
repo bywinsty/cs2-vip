@@ -9,8 +9,16 @@ import os
 from pathlib import Path
 import stat
 import tarfile
+import tempfile
 import time
 import zipfile
+
+from safe_file_tree import (
+    UnsafeTreeError,
+    collect_regular_files,
+    validate_archive_output,
+    validate_archive_prefix,
+)
 
 
 def epoch() -> int:
@@ -20,18 +28,14 @@ def epoch() -> int:
     return int(value)
 
 
-def files(root: Path) -> list[Path]:
-    return sorted((path for path in root.rglob("*") if path.is_file()), key=lambda p: p.relative_to(root).as_posix())
-
-
 def mode(path: Path) -> int:
     return 0o755 if path.stat().st_mode & stat.S_IXUSR else 0o644
 
 
-def create_zip(root: Path, output: Path, timestamp: int, prefix: str) -> None:
+def create_zip(root: Path, paths: list[Path], output: Path, timestamp: int, prefix: str) -> None:
     zip_time = time.gmtime(max(timestamp, 315532800))[:6]
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-        for path in files(root):
+        for path in paths:
             relative = path.relative_to(root).as_posix()
             name = f"{prefix}/{relative}" if prefix else relative
             info = zipfile.ZipInfo(name, zip_time)
@@ -41,10 +45,10 @@ def create_zip(root: Path, output: Path, timestamp: int, prefix: str) -> None:
             archive.writestr(info, path.read_bytes())
 
 
-def create_tar_gz(root: Path, output: Path, timestamp: int, prefix: str) -> None:
+def create_tar_gz(root: Path, paths: list[Path], output: Path, timestamp: int, prefix: str) -> None:
     with output.open("wb") as raw, gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=timestamp, compresslevel=9) as compressed:
         with tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as archive:
-            for path in files(root):
+            for path in paths:
                 relative = path.relative_to(root).as_posix()
                 name = f"{prefix}/{relative}" if prefix else relative
                 info = archive.gettarinfo(str(path), arcname=name)
@@ -63,14 +67,24 @@ def main() -> int:
     parser.add_argument("--format", choices=("zip", "tar.gz"), required=True)
     parser.add_argument("--prefix", default="")
     args = parser.parse_args()
-    root = args.root.resolve()
-    if not root.is_dir():
-        raise SystemExit(f"archive root is not a directory: {root}")
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    if args.format == "zip":
-        create_zip(root, args.output, epoch(), args.prefix.strip("/"))
-    else:
-        create_tar_gz(root, args.output, epoch(), args.prefix.strip("/"))
+    try:
+        root, paths = collect_regular_files(args.root)
+        output = validate_archive_output(root, args.output)
+        prefix = validate_archive_prefix(args.prefix)
+    except UnsafeTreeError as exc:
+        raise SystemExit(f"archive creation refused: {exc}") from exc
+    with tempfile.NamedTemporaryFile(
+            prefix=f".{output.name}.", suffix=".tmp", dir=output.parent, delete=False
+    ) as temporary_handle:
+        temporary = Path(temporary_handle.name)
+    try:
+        if args.format == "zip":
+            create_zip(root, paths, temporary, epoch(), prefix)
+        else:
+            create_tar_gz(root, paths, temporary, epoch(), prefix)
+        os.replace(temporary, output)
+    finally:
+        temporary.unlink(missing_ok=True)
     return 0
 
 
