@@ -12,6 +12,7 @@ def main() -> int:
     build = (ROOT / "AMBuildScript").read_text(encoding="utf-8")
     package = (ROOT / "PackageScript").read_text(encoding="utf-8")
     workflow = (ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
+    prepare_tools = (ROOT / ".github/actions/prepare-build-tools/action.yml").read_text(encoding="utf-8")
     failures = []
     if "target_archs = ['x86_64']" not in build:
         failures.append("AMBuildScript must default to x86_64")
@@ -39,6 +40,10 @@ def main() -> int:
         failures.append("manylinux_2_28 build image must be pinned by a full sha256 digest")
     if workflow.count('--max-glibc "$GLIBC_BASELINE"') != 2:
         failures.append("both release builds must enforce the GLIBC baseline")
+    if "/opt/python/cp312-cp312/bin" not in prepare_tools:
+        failures.append("build tools must use the Python bundled with the manylinux image")
+    if "actions/setup-python@" in prepare_tools:
+        failures.append("manylinux build must not inject a host-glibc Python runtime")
     for required in ("-fstack-protector-strong", "_FORTIFY_SOURCE=2", "-Wdate-time", "-ffile-prefix-map", "-z,relro,-z,now,-z,noexecstack"):
         if required not in build:
             failures.append(f"hardening requirement is missing: {required}")
