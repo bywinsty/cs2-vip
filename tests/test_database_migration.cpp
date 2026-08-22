@@ -35,7 +35,7 @@ int main()
     assert(plan.archiveConflicts.size() == 2);
     assert(plan.removeConflicts.size() == 2);
     assert(plan.normalizeLegacy.find("4294967296") != std::string::npos);
-    assert(plan.warnUnmapped.find("account_id = 0") != std::string::npos);
+    assert(plan.warnUnmapped.find("`account_id` = 0") != std::string::npos);
     assert(plan.finalizeUnsignedColumn.find("BIGINT UNSIGNED") != std::string::npos);
     assert(plan.recordVersion.find("steamid64-v2") != std::string::npos);
     return 0;
