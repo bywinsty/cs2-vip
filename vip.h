@@ -52,7 +52,7 @@ private: // Hooks
 };
 
 class VIPApi : public IVIPApi {
-	bool bReady;
+	bool bReady = false;
     std::vector<ReadyCallbackFunc> vipOnVIPLoadeds;
     std::vector<SpawnCallbackFunc> vipOnPlayerSpawn;
     std::vector<ClientLoadedOrDisconnectCallbackFunc> vipOnClientLoaded;

@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 #define SQLMM_INTERFACE "SQLInterface"
 

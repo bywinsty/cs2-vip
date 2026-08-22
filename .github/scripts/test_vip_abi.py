@@ -42,6 +42,20 @@ class VipAbiContractTests(unittest.TestCase):
         probe = self.factory.index("EmitRuntimeReadyProbe();", ready)
         self.assertGreater(probe, ready)
 
+    def test_server_console_probe_writes_nonce_bound_database_evidence(self):
+        for required in (
+            "RuntimeProbeCommand(const CCommandContext &context",
+            "context.GetPlayerSlot().Get() >= 0",
+            '"vip_runtime_probe"',
+            "FCVAR_SERVER_CAN_EXECUTE",
+            "ValidRuntimeNonce",
+            '"bigint unsigned"',
+            "VIP_BUILD_COMMIT",
+            "g_pFullFileSystem->RenameFile",
+            "runtime-probe/v1",
+        ):
+            self.assertIn(required, self.factory)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 
+from dependency_manifest import load_dependency_manifest
 from safe_file_tree import UnsafeTreeError, collect_regular_files, is_link_like, validate_archive_output
 
 
@@ -35,52 +36,31 @@ def created_timestamp() -> str:
     return dt.datetime.fromtimestamp(int(raw), tz=dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def requirement_entries(path: Path | None) -> list[tuple[str, str]]:
-    if path is None:
-        return []
-    logical: list[str] = []
-    pending = ""
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        pending += (" " if pending else "") + line.removesuffix("\\").strip()
-        if line.endswith("\\"):
-            continue
-        logical.append(pending)
-        pending = ""
-    if pending:
-        logical.append(pending)
-    entries: list[tuple[str, str]] = []
-    for line in logical:
-        match = re.match(r"^([A-Za-z0-9_.-]+)==([^\s;]+)", line)
-        if match:
-            entries.append((match.group(1), match.group(2)))
-    return sorted(set(entries), key=lambda item: item[0].lower())
-
-
-def dependency_package(name: str, version: str, location: str) -> dict:
-    return {
-        "SPDXID": spdx_id("Dependency", f"{name}-{version}-{location}"),
-        "name": name,
-        "versionInfo": version,
-        "downloadLocation": location,
+def dependency_package(dependency: dict) -> dict:
+    package = {
+        "SPDXID": spdx_id("Dependency", dependency["capability"]),
+        "name": dependency["name"],
+        "versionInfo": dependency["version"],
+        "downloadLocation": dependency["download_location"],
         "filesAnalyzed": False,
         "licenseConcluded": "NOASSERTION",
         "licenseDeclared": "NOASSERTION",
         "copyrightText": "NOASSERTION",
+        "comment": (
+            f"canonical-capability={dependency['capability']}; "
+            f"required={str(dependency['required']).lower()}; purpose={dependency['purpose']}"
+        ),
     }
-
-
-def parse_git_dependency(value: str) -> tuple[str, str, str]:
-    try:
-        name, reference = value.split("=", 1)
-        repository, commit = reference.rsplit("#", 1)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError("expected NAME=REPOSITORY#COMMIT") from exc
-    if not name or not repository or not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
-        raise argparse.ArgumentTypeError("git dependency must use a full 40-character commit SHA")
-    return name, repository.rstrip("/"), commit.lower()
+    if dependency.get("artifact_sha256"):
+        package["checksums"] = [{
+            "algorithm": "SHA256",
+            "checksumValue": dependency["artifact_sha256"],
+        }]
+    if dependency.get("version_evidence"):
+        package["attributionTexts"] = [
+            f"Exact deployed version evidence: {dependency['version_evidence']}"
+        ]
+    return package
 
 
 def build_document(args: argparse.Namespace) -> dict:
@@ -149,27 +129,19 @@ def build_document(args: argparse.Namespace) -> dict:
         "hasFiles": [entry["SPDXID"] for entry in spdx_files],
     }
 
-    dependencies: list[dict] = []
-    for name, repository, commit in args.git_dependency:
-        dependencies.append(dependency_package(name, commit, f"{repository}/tree/{commit}"))
-    for name, version in requirement_entries(args.requirements):
-        normalized = name.replace("_", "-").lower()
-        dependencies.append(
-            dependency_package(
-                name,
-                version,
-                f"https://pypi.org/project/{normalized}/{version}/",
-            )
-        )
-    dependencies.sort(key=lambda item: (item["name"].lower(), item["versionInfo"]))
-    for dependency in dependencies:
-        relationships.append(
-            {
-                "spdxElementId": "SPDXRef-ReleaseArchive",
-                "relationshipType": "DEPENDS_ON",
-                "relatedSpdxElement": dependency["SPDXID"],
-            }
-        )
+    manifest_dependencies = load_dependency_manifest(args.dependency_manifest)
+    dependencies = [dependency_package(item) for item in manifest_dependencies]
+    packages_by_capability = {
+        item["capability"]: package
+        for item, package in zip(manifest_dependencies, dependencies, strict=True)
+    }
+    for dependency in manifest_dependencies:
+        for relationship in dependency["relationships"]:
+            relationships.append({
+                "spdxElementId": packages_by_capability[dependency["capability"]]["SPDXID"],
+                "relationshipType": relationship,
+                "relatedSpdxElement": "SPDXRef-ReleaseArchive",
+            })
 
     namespace_repository = args.repository.strip("/")
     return {
@@ -199,14 +171,7 @@ def main() -> int:
     parser.add_argument("--archive", required=True, type=Path)
     parser.add_argument("--root", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--requirements", type=Path)
-    parser.add_argument(
-        "--git-dependency",
-        action="append",
-        default=[],
-        type=parse_git_dependency,
-        metavar="NAME=REPOSITORY#COMMIT",
-    )
+    parser.add_argument("--dependency-manifest", required=True, type=Path)
     args = parser.parse_args()
     try:
         args.output = validate_archive_output(args.root.resolve(strict=True), args.output)
