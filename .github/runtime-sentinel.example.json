@@ -1,0 +1,46 @@
+{
+  "schema_version": 2,
+  "purpose": "vip-ci-test-server",
+  "production": false,
+  "game_directory": "game/csgo",
+  "server_command": [
+    "game/bin/linuxsteamrt64/cs2"
+  ],
+  "server_build_id_file": "steamapps/appmanifest_730.acf",
+  "expected_server_build_id": 12345678,
+  "minimum_free_gib": 10,
+  "map": "de_dust2",
+  "startup_timeout_seconds": 180,
+  "shutdown_timeout_seconds": 20,
+  "a2s": {
+    "host": "127.0.0.1",
+    "port": 27015,
+    "timeout_seconds": 2
+  },
+  "runtime_dependencies": [
+    {
+      "kind": "metamod",
+      "name": "Metamod:Source",
+      "path": "game/csgo/addons/metamod/bin/linuxsteamrt64/server.so",
+      "version": "2.0.0",
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    },
+    {
+      "kind": "plugin",
+      "name": "Menu API",
+      "metamod_name": "Menu System",
+      "path": "game/csgo/addons/menu_system/menu_system.so",
+      "version": "1.0.0",
+      "sha256": "123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0"
+    },
+    {
+      "kind": "plugin",
+      "name": "SQL runtime",
+      "metamod_name": "MySQL Extension",
+      "path": "game/csgo/addons/vip/runtime/sql-driver.so",
+      "version": "1.0.0",
+      "sha256": "23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01"
+    }
+  ],
+  "additional_arguments": []
+}

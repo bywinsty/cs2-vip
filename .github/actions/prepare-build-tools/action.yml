@@ -1,0 +1,59 @@
+name: Prepare build tools
+description: Configure pinned Python and validate the manylinux build toolchain.
+
+outputs:
+  python-version:
+    description: Resolved Python version.
+    value: ${{ steps.python-info.outputs.python-version }}
+  missing-apt-packages:
+    description: Packages missing before setup.
+    value: ${{ steps.package-audit.outputs.missing-apt-packages }}
+  apt-updated:
+    description: Whether apt-get update was required.
+    value: ${{ steps.package-audit.outputs.apt-updated }}
+
+runs:
+  using: composite
+  steps:
+    - name: Select bundled manylinux Python
+      shell: bash
+      run: |
+        set -euo pipefail
+        python_bin=/opt/python/cp312-cp312/bin
+        test -x "$python_bin/python"
+        printf '%s\n' "$python_bin" >> "$GITHUB_PATH"
+    - name: Install missing system packages
+      id: package-audit
+      shell: bash
+      run: |
+        set -euo pipefail
+        required_commands=(readelf gcc g++ file git unzip zip)
+        missing_packages=()
+        for command in "${required_commands[@]}"; do
+          if ! command -v "$command" >/dev/null; then missing_packages+=("$command"); fi
+        done
+        apt_updated=false
+        if ((${#missing_packages[@]} > 0)); then
+          if command -v dnf >/dev/null; then
+            dnf -y install binutils gcc gcc-c++ file git unzip zip
+          elif command -v apt-get >/dev/null; then
+            privilege=()
+            if [[ "$(id -u)" != "0" ]]; then privilege=(sudo); fi
+            "${privilege[@]}" apt-get update -qy
+            "${privilege[@]}" apt-get install -y binutils gcc g++ file git unzip zip
+          else
+            printf 'missing build commands and no supported package manager: %s\n' "${missing_packages[*]}" >&2
+            exit 1
+          fi
+          apt_updated=true
+        fi
+        printf 'missing-apt-packages=%s\n' "${missing_packages[*]}" >> "$GITHUB_OUTPUT"
+        printf 'apt-updated=%s\n' "$apt_updated" >> "$GITHUB_OUTPUT"
+    - name: Verify Python and build tools
+      id: python-info
+      shell: bash
+      run: |
+        set -euo pipefail
+        python_version="$(python --version 2>&1 | awk '{print $2}')"
+        printf 'python-version=%s\n' "$python_version" >> "$GITHUB_OUTPUT"
+        for command in readelf gcc g++ git zip unzip file; do command -v "$command" >/dev/null; done

@@ -1,0 +1,125 @@
+name: Promote verified Core release
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: Successful Build AMBuild Plugin push run for the current Core tip
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    name: Promote attested Core candidate
+    if: github.ref_name == 'Core'
+    permissions:
+      actions: read
+      contents: write
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: release-Core
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BUILD_RUN_ID: ${{ inputs.build_run_id }}
+      RELEASE_TAG: Core
+      RELEASE_TITLE: Core
+      RUNTIME_VALIDATION_SHA: ${{ vars.RUNTIME_VALIDATION_SHA }}
+      RUNTIME_VALIDATION_REPORT_URL: ${{ vars.RUNTIME_VALIDATION_REPORT_URL }}
+
+    steps:
+      - name: Checkout current Core
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: Core
+
+      - name: Verify promotion authorization and build run
+        run: |
+          set -euo pipefail
+          [[ "$BUILD_RUN_ID" =~ ^[0-9]+$ ]]
+          core_tip="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/Core" --jq '.object.sha')"
+          test "$GITHUB_SHA" = "$core_tip"
+          test "$RUNTIME_VALIDATION_SHA" = "$core_tip"
+          test -n "$RUNTIME_VALIDATION_REPORT_URL"
+          run_json="$(gh run view "$BUILD_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --json databaseId,headSha,headBranch,event,conclusion,workflowName)"
+          test "$(jq -r '.databaseId' <<<"$run_json")" = "$BUILD_RUN_ID"
+          test "$(jq -r '.headSha' <<<"$run_json")" = "$core_tip"
+          test "$(jq -r '.headBranch' <<<"$run_json")" = Core
+          test "$(jq -r '.event' <<<"$run_json")" = push
+          test "$(jq -r '.conclusion' <<<"$run_json")" = success
+          test "$(jq -r '.workflowName' <<<"$run_json")" = "Build AMBuild Plugin"
+
+      - name: Download exact build candidate
+        run: |
+          mkdir release-files
+          gh run download "$BUILD_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name compile --dir release-files
+
+      - name: Verify subjects and candidate attestations
+        run: |
+          set -euo pipefail
+          expected=$'vip.spdx.json\nvip.zip'
+          test "$(find release-files -mindepth 1 -maxdepth 1 | wc -l)" -eq 2
+          test "$(find release-files -maxdepth 1 -type f -printf '%f\n' | sort)" = "$expected"
+          zip -T release-files/vip.zip
+          python .github/scripts/verify_spdx_subject.py \
+            --archive release-files/vip.zip \
+            --sbom release-files/vip.spdx.json
+          test "$(jq -r '.packages[] | select(.SPDXID == "SPDXRef-ReleaseArchive") | .versionInfo' \
+            release-files/vip.spdx.json)" = "$GITHUB_SHA"
+          gh attestation verify release-files/vip.zip --repo "$GITHUB_REPOSITORY"
+          gh attestation verify release-files/vip.zip --repo "$GITHUB_REPOSITORY" \
+            --predicate-type https://spdx.dev/Document/v2.3
+          gh attestation verify release-files/vip.spdx.json --repo "$GITHUB_REPOSITORY"
+
+      - name: Move verified Core tag
+        run: bash .github/scripts/update_release_tag.sh
+
+      - name: Create or update stable release
+        run: |
+          notes=$'Manually promoted verified Core release.\n\nCommit: '"$GITHUB_SHA"$'\nBuild run: https://github.com/'"$GITHUB_REPOSITORY"'/actions/runs/'"$BUILD_RUN_ID"$'\nRuntime validation: '"$RUNTIME_VALIDATION_REPORT_URL"
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --title "$RELEASE_TITLE" --notes "$notes" \
+              --draft=false --prerelease=false
+          else
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --title "$RELEASE_TITLE" --notes "$notes"
+          fi
+          gh release upload "$RELEASE_TAG" release-files/vip.zip release-files/vip.spdx.json \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Re-download and compare stable assets
+        run: |
+          set -euo pipefail
+          downloaded="$(mktemp -d)"
+          success=false
+          for attempt in 1 2 3 4 5; do
+            rm -rf "$downloaded"/*
+            if gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern vip.zip --pattern vip.spdx.json --dir "$downloaded"; then
+              success=true
+              break
+            fi
+            sleep 3
+          done
+          test "$success" = true
+          expected=$'vip.spdx.json\nvip.zip'
+          test "$(find "$downloaded" -mindepth 1 -maxdepth 1 | wc -l)" -eq 2
+          test "$(find "$downloaded" -maxdepth 1 -type f -printf '%f\n' | sort)" = "$expected"
+          for name in vip.zip vip.spdx.json; do
+            test "$(stat -c '%s' "release-files/$name")" = "$(stat -c '%s' "$downloaded/$name")"
+            test "$(sha256sum "release-files/$name" | cut -d' ' -f1)" = \
+              "$(sha256sum "$downloaded/$name" | cut -d' ' -f1)"
+            cmp "release-files/$name" "$downloaded/$name"
+          done
+          python .github/scripts/verify_spdx_subject.py \
+            --archive "$downloaded/vip.zip" --sbom "$downloaded/vip.spdx.json"
+          gh attestation verify "$downloaded/vip.zip" --repo "$GITHUB_REPOSITORY"
+          gh attestation verify "$downloaded/vip.zip" --repo "$GITHUB_REPOSITORY" \
+            --predicate-type https://spdx.dev/Document/v2.3
+          gh attestation verify "$downloaded/vip.spdx.json" --repo "$GITHUB_REPOSITORY"

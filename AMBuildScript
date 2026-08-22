@@ -1,4 +1,5 @@
 # vim: set sts=2 ts=8 sw=2 tw=99 et ft=python:
+import datetime
 import os, sys
 
 def ResolveEnvPath(env, folder):
@@ -6,15 +7,15 @@ def ResolveEnvPath(env, folder):
     path = os.environ[env]
     if os.path.isdir(path):
       return path
-  else:
-    head = os.getcwd()
-    oldhead = None
-    while head != None and head != oldhead:
-      path = os.path.join(head, folder)
-      if os.path.isdir(path):
-        return path
-      oldhead = head
-      head, tail = os.path.split(head)
+
+  head = os.getcwd()
+  oldhead = None
+  while head != None and head != oldhead:
+    path = os.path.join(head, folder)
+    if os.path.isdir(path):
+      return path
+    oldhead = head
+    head, tail = os.path.split(head)
   return None
 
 def ResolveMMSRoot():
@@ -53,6 +54,15 @@ class MMSPluginConfig(object):
     self.sdk_targets = []
     self.binaries = []
     self.mms_root = mms_root
+    self.schemaentity_root = os.path.abspath(os.path.normpath(builder.options.schemaentity_root))
+    if not os.path.isfile(os.path.join(self.schemaentity_root, 'schemasystem.cpp')):
+      raise Exception('Invalid --schemaentity-root: schemasystem.cpp is missing')
+    source_date_epoch = os.environ.get('SOURCE_DATE_EPOCH', '')
+    if not source_date_epoch.isdigit():
+      raise Exception('SOURCE_DATE_EPOCH must be set to a non-negative integer')
+    self.build_date = datetime.datetime.fromtimestamp(
+      int(source_date_epoch), datetime.timezone.utc
+    ).strftime('%Y-%m-%d')
     self.all_targets = []
     self.target_archs = set()
 
@@ -69,7 +79,7 @@ class MMSPluginConfig(object):
     if builder.options.targets:
       target_archs = builder.options.targets.split(',')
     else:
-      target_archs = ['x86', 'x86_64']
+      target_archs = ['x86_64']
 
     for arch in target_archs:
         try:
@@ -109,7 +119,7 @@ class MMSPluginConfig(object):
   def configure(self):
     for cxx in self.all_targets:
       if cxx.target.arch not in ['x86', 'x86_64']:
-        raise Exception('Unknown target architecture: {0}'.format(arch))
+        raise Exception('Unknown target architecture: {0}'.format(cxx.target.arch))
 
       self.configure_cxx(cxx)
 
@@ -134,8 +144,22 @@ class MMSPluginConfig(object):
         '-Wno-switch',
         '-msse',
         '-fPIC',
-        '-frtti'
+        '-frtti',
+        '-fstack-protector-strong',
+        '-Wdate-time',
       ]
+
+      for path in (os.path.abspath(builder.sourcePath), os.path.abspath(builder.buildPath)):
+        cxx.cflags += [
+          '-ffile-prefix-map={}=.'.format(path),
+          '-fdebug-prefix-map={}=.'.format(path),
+          '-fmacro-prefix-map={}=.'.format(path),
+        ]
+
+      # glibc 2.28 provides fortify level 2. Level 3 requires newer glibc
+      # headers and would silently raise the release ABI baseline.
+      cxx.defines += ['_FORTIFY_SOURCE=2']
+      cxx.defines += ['VIP_BUILD_DATE=\"{}\"'.format(self.build_date)]
 
       cxx.cxxflags += ['-std=c++17']
       if (cxx.version >= 'gcc-4.0') or cxx.family == 'clang':
@@ -235,7 +259,11 @@ class MMSPluginConfig(object):
         cxx.linkflags += ['-static-libgcc']
       elif cxx.family == 'clang':
         cxx.linkflags += ['-lgcc_eh']
-      cxx.linkflags += ['-static-libstdc++']
+      cxx.linkflags += [
+        '-static-libstdc++',
+        '-Wl,-z,relro,-z,now,-z,noexecstack',
+        '-Wl,--build-id=sha1',
+      ]
     elif cxx.target.platform == 'windows':
       cxx.defines += ['WIN32', '_WINDOWS']
 
@@ -261,7 +289,6 @@ class MMSPluginConfig(object):
     cxx.defines += ['META_IS_SOURCE2']
     binary.sources += [
       os.path.join(sdk['path'], 'public', 'tier0', 'memoverride.cpp'),
-      os.path.join(sdk['path'], 'tier1', 'generichash.cpp'),
       os.path.join(sdk['path'], 'entity2', 'entitysystem.cpp'),
       os.path.join(sdk['path'], 'entity2', 'entityidentity.cpp'),
       os.path.join(sdk['path'], 'entity2', 'entitykeyvalues.cpp'),
