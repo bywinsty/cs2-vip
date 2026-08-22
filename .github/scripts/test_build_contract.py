@@ -2,6 +2,7 @@
 """Static checks for the single-target VIP Core build contract."""
 
 from pathlib import Path
+import json
 import re
 
 
@@ -14,6 +15,10 @@ def main() -> int:
     workflow = (ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
     prepare_tools = (ROOT / ".github/actions/prepare-build-tools/action.yml").read_text(encoding="utf-8")
     compatibility_patches = (ROOT / ".github/scripts/apply_sdk_compatibility_patches.py").read_text(encoding="utf-8")
+    dependency_manifest = json.loads(
+        (ROOT / ".github/dependency-manifest.json").read_text(encoding="utf-8")
+    )
+    dependencies = {item["capability"]: item for item in dependency_manifest["dependencies"]}
     failures = []
     if "target_archs = ['x86_64']" not in build:
         failures.append("AMBuildScript must default to x86_64")
@@ -37,6 +42,10 @@ def main() -> int:
         "verify_elf_hardening.py", "test_verify_elf_hardening.py",
         "cmp build/package/addons/vip/vip.so", "--require-hashes",
         "abi_legacy_probe.cpp", "abi_v2_probe.cpp",
+        "VIP_BUILD_COMMIT: ${{ github.sha }}",
+        "dependency-manifest.json", "verify_spdx_dependencies.py",
+        "test_sdk_compatibility_patches.py", "hash_file_tree.py",
+        "sdk-patched-first.sha256", "sdk-patched-second.sha256",
     ):
         if required not in workflow:
             failures.append(f"workflow requirement is missing: {required}")
@@ -66,6 +75,34 @@ def main() -> int:
         failures.append("AMBuilder must not discover SchemaEntity outside the checkout")
     if "__DATE__" in (ROOT / "vip.cpp").read_text(encoding="utf-8"):
         failures.append("vip.cpp must not use non-reproducible date/time macros")
+    if "VIP_BUILD_COMMIT" not in build or "self.build_commit != 'local'" not in build:
+        failures.append("AMBuildScript must embed and validate VIP_BUILD_COMMIT")
+    if "pull_request:\n    branches:\n      - Core\n      - PR\n      - dev" not in workflow:
+        failures.append("build workflow must validate merge refs targeting Core, PR and dev")
+    if "pull_request_target" in workflow:
+        failures.append("untrusted PR checks must not use pull_request_target")
+    if "[skip ci]" in workflow:
+        failures.append("protected build jobs must not implement a skip-ci success path")
+    workflow_pins = {
+        "ambuild": "AMBUILD_REF",
+        "metamod-source": "MMS_REF",
+        "hl2sdk-cs2": "HL2SDK_REF",
+        "schemaentity": "SCHEMAENTITY_REF",
+        "hl2sdk-manifests": "MANIFEST_REF",
+    }
+    for capability, environment_name in workflow_pins.items():
+        version = dependencies[capability]["version"]
+        if f'{environment_name}: "{version}"' not in workflow:
+            failures.append(f"workflow {environment_name} drifted from dependency manifest")
+    if dependencies["build-environment"]["version"].removeprefix("sha256:") not in workflow:
+        failures.append("build image digest drifted from dependency manifest")
+    if dependencies["protoc"]["version"] != "21.8" or dependencies["protoc"]["artifact_sha256"] not in workflow:
+        failures.append("protoc pin drifted from dependency manifest")
+    requirements = (ROOT / ".github/ci-requirements.txt").read_text(encoding="utf-8")
+    for capability in ("python-pip", "python-setuptools", "python-importlib-metadata", "python-zipp"):
+        dependency = dependencies[capability]
+        if f'{dependency["name"]}=={dependency["version"]}' not in requirements:
+            failures.append(f"Python tooling pin drifted from dependency manifest: {capability}")
     if failures:
         print("VIP Core build contract failed:", *failures, sep="\n- ")
         return 1

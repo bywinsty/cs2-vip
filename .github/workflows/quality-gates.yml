@@ -1,0 +1,57 @@
+name: Quality gates
+
+on:
+  push:
+    branches:
+      - Core
+      - PR
+      - dev
+  pull_request:
+    branches:
+      - Core
+      - PR
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    name: Unit and contract tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Run Python contract and unit tests
+        run: |
+          set -euo pipefail
+          tests=(
+            .github/scripts/test_build_contract.py
+            .github/scripts/test_branch_protection.py
+            .github/scripts/test_cshost_runtime_validate.py
+            .github/scripts/test_generate_spdx_sbom.py
+            .github/scripts/test_release_workflow.py
+            .github/scripts/test_reproducible_archive.py
+            .github/scripts/test_runtime_validate.py
+            .github/scripts/test_sdk_compatibility_patches.py
+            .github/scripts/test_update_release_tag.py
+            .github/scripts/test_verify_elf_hardening.py
+            .github/scripts/test_verify_runtime_validation.py
+            .github/scripts/test_vip_abi.py
+            .github/scripts/test_database_migration.py
+            tests/test_steamid64.py
+          )
+          for test_file in "${tests[@]}"; do python "$test_file"; done
+      - name: Compile standalone C++ contracts
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -Wall -Wextra -Werror -Iinclude \
+            tests/test_database_migration.cpp -o "$RUNNER_TEMP/database-migration-test"
+          "$RUNNER_TEMP/database-migration-test"
+          g++ -std=c++17 -Wall -Wextra -Werror -fsyntax-only tests/abi_legacy_probe.cpp
+          g++ -std=c++17 -Wall -Wextra -Werror -fsyntax-only tests/abi_v2_probe.cpp
+      - name: Verify clean test tree
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=all)"

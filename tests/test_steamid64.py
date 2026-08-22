@@ -4,6 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / "vip.cpp").read_text(encoding="utf-8")
+MIGRATION = (ROOT / "include/vip_database_migration.h").read_text(encoding="utf-8")
 
 
 def main():
@@ -13,11 +14,21 @@ def main():
         "ALTER TABLE `vip_users` MODIFY `account_id` BIGINT UNSIGNED NOT NULL",
         "uint32 legacySteamID = static_cast<uint32>(m_steamID)",
         "account_id` IN (%llu, %u)",
-        "NormalizeSteamID64",
         "MigrateLegacyClientData",
         "FOR_EACH_VALUE(legacyData, pValue)",
+        "enum class DatabaseState",
+        "DatabaseReady()",
+        "StartDatabaseMigration()",
+        "ExecuteTransaction",
+        "SetReady(false)",
+        "std::from_chars",
     )
-    missing = [item for item in required if item not in SOURCE]
+    missing = [item for item in required if item not in SOURCE and item not in MIGRATION]
+    migration_required = (
+        "GET_LOCK", "vip_schema_migrations", "vip_users_migration_conflicts",
+        "4294967296", "steamid64-v2", "BIGINT SIGNED NOT NULL",
+    )
+    missing.extend(item for item in migration_required if item not in MIGRATION)
     forbidden = [
         "uint32 m_steamID",
         "GetStaticAccountKey()",

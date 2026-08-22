@@ -1,0 +1,65 @@
+{
+  "schema": "https://github.com/bywinsty/cs2-vip/cshost-runtime-sentinel/v3",
+  "purpose": "vip-ci-test-server",
+  "production": false,
+  "stage_id": "REPLACE_ME_WITH_SHA256_OF_AN_OPAQUE_STAGE_IDENTIFIER",
+  "plugin_path": "addons/vip/vip.so",
+  "evidence_directory": "addons/data",
+  "startup_timeout_seconds": 180,
+  "shutdown_timeout_seconds": 60,
+  "probe_timeout_seconds": 120,
+  "a2s": {
+    "host": "REPLACE_ME_WITH_PUBLIC_TEST_SERVER_HOST",
+    "port": 27015
+  },
+  "runtime_dependencies": [
+    {
+      "capability": "metamod",
+      "name": "Metamod:Source",
+      "version": "REPLACE_ME",
+      "path": "addons/metamod/bin/linuxsteamrt64/server.so",
+      "sha256": "REPLACE_ME",
+      "optional": false
+    },
+    {
+      "capability": "utils",
+      "name": "Utils provider",
+      "version": "REPLACE_ME",
+      "path": "addons/REPLACE_ME/utils.so",
+      "sha256": "REPLACE_ME",
+      "optional": false
+    },
+    {
+      "capability": "menus",
+      "name": "Menus provider",
+      "version": "REPLACE_ME",
+      "path": "addons/REPLACE_ME/menus.so",
+      "sha256": "REPLACE_ME",
+      "optional": false
+    },
+    {
+      "capability": "players",
+      "name": "Players provider",
+      "version": "REPLACE_ME",
+      "path": "addons/REPLACE_ME/players.so",
+      "sha256": "REPLACE_ME",
+      "optional": false
+    },
+    {
+      "capability": "sqlmm",
+      "name": "SQLMM provider",
+      "version": "REPLACE_ME",
+      "path": "addons/REPLACE_ME/sqlmm.so",
+      "sha256": "REPLACE_ME",
+      "optional": false
+    },
+    {
+      "capability": "cookies",
+      "name": "Cookies provider",
+      "version": "REPLACE_ME",
+      "path": "addons/REPLACE_ME/cookies.so",
+      "sha256": "REPLACE_ME",
+      "optional": true
+    }
+  ]
+}

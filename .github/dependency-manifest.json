@@ -1,0 +1,161 @@
+{
+  "$schema": "https://github.com/bywinsty/cs2-vip/dependency-manifest/v1",
+  "schema_version": 1,
+  "dependencies": [
+    {
+      "capability": "build-environment",
+      "name": "manylinux_2_28_x86_64 build environment",
+      "version": "sha256:0c87ccb5996dab6c3b7612ee4fda7b80c4ab3c44a86c2541e4a872afdf4f131b",
+      "download_location": "https://quay.io/repository/pypa/manylinux_2_28_x86_64",
+      "purpose": "Pinned GCC 14 compatible release build environment",
+      "required": true,
+      "relationships": ["BUILD_TOOL_OF"]
+    },
+    {
+      "capability": "ambuild",
+      "name": "AMBuild",
+      "version": "d89ec91a7ac2607da07b50bb62346f9a10e9a998",
+      "download_location": "https://github.com/alliedmodders/ambuild/tree/d89ec91a7ac2607da07b50bb62346f9a10e9a998",
+      "purpose": "Build graph generator and executor",
+      "required": true,
+      "relationships": ["BUILD_TOOL_OF"]
+    },
+    {
+      "capability": "metamod-source",
+      "name": "Metamod:Source",
+      "version": "2667e8e5947237c4cb7ea45cec3913ad6a44757c",
+      "download_location": "https://github.com/alliedmodders/metamod-source/tree/2667e8e5947237c4cb7ea45cec3913ad6a44757c",
+      "purpose": "Build headers and externally provided runtime loader",
+      "required": true,
+      "relationships": ["BUILD_DEPENDENCY_OF", "PROVIDED_DEPENDENCY_OF"]
+    },
+    {
+      "capability": "hl2sdk-cs2",
+      "name": "HL2SDK-CS2",
+      "version": "80cf8554d716a3841fe0680013cae3411a056a8d",
+      "download_location": "https://github.com/alliedmodders/hl2sdk/tree/80cf8554d716a3841fe0680013cae3411a056a8d",
+      "purpose": "Counter-Strike 2 SDK headers, libraries and protobuf sources",
+      "required": true,
+      "relationships": ["BUILD_DEPENDENCY_OF"]
+    },
+    {
+      "capability": "hl2sdk-manifests",
+      "name": "HL2SDK-Manifests",
+      "version": "20b3a014264b38908c4a5d4eb263ba2c488f3dc1",
+      "download_location": "https://github.com/alliedmodders/hl2sdk-manifests/tree/20b3a014264b38908c4a5d4eb263ba2c488f3dc1",
+      "purpose": "SDK discovery and include-path manifest",
+      "required": true,
+      "relationships": ["BUILD_TOOL_OF"]
+    },
+    {
+      "capability": "schemaentity",
+      "name": "SchemaEntity",
+      "version": "e7965b3c83ec684d44584ee6457c5482ee5d9db1",
+      "download_location": "https://github.com/pisex/SchemaEntity/tree/e7965b3c83ec684d44584ee6457c5482ee5d9db1",
+      "purpose": "Schema bindings compiled into the VIP binary",
+      "required": true,
+      "relationships": ["BUILD_DEPENDENCY_OF"]
+    },
+    {
+      "capability": "protoc",
+      "name": "Protocol Buffers compiler",
+      "version": "21.8",
+      "download_location": "https://github.com/protocolbuffers/protobuf/releases/tag/v21.8",
+      "purpose": "Generates CS2 protobuf sources during the build",
+      "required": true,
+      "relationships": ["BUILD_TOOL_OF"],
+      "artifact_sha256": "f90d0dd59065fef94374745627336d622702b67f0319f96cee894d41a974d47a"
+    },
+    {
+      "capability": "python-pip",
+      "name": "pip",
+      "version": "26.2.1",
+      "download_location": "https://pypi.org/project/pip/26.2.1/",
+      "purpose": "Installs the pinned Python build toolchain",
+      "required": true,
+      "relationships": ["BUILD_TOOL_OF"]
+    },
+    {
+      "capability": "python-setuptools",
+      "name": "setuptools",
+      "version": "68.1.2",
+      "download_location": "https://pypi.org/project/setuptools/68.1.2/",
+      "purpose": "Build-time Python packaging support required by AMBuild",
+      "required": true,
+      "relationships": ["BUILD_TOOL_OF"]
+    },
+    {
+      "capability": "python-importlib-metadata",
+      "name": "importlib-metadata",
+      "version": "9.0.0",
+      "download_location": "https://pypi.org/project/importlib-metadata/9.0.0/",
+      "purpose": "Pinned Python build-tool dependency",
+      "required": true,
+      "relationships": ["BUILD_TOOL_OF"]
+    },
+    {
+      "capability": "python-zipp",
+      "name": "zipp",
+      "version": "4.1.0",
+      "download_location": "https://pypi.org/project/zipp/4.1.0/",
+      "purpose": "Pinned Python build-tool dependency",
+      "required": true,
+      "relationships": ["BUILD_TOOL_OF"]
+    },
+    {
+      "capability": "cs2-runtime",
+      "name": "Counter-Strike 2 dedicated server",
+      "version": "runtime-validation-v3.cs2_build",
+      "download_location": "https://store.steampowered.com/app/730/CounterStrike_2/",
+      "purpose": "Game runtime; the exact deployed build is bound by runtime-validation-v3 evidence",
+      "required": true,
+      "relationships": ["RUNTIME_DEPENDENCY_OF"],
+      "version_evidence": "runtime-validation-v3.json#/cs2_build"
+    },
+    {
+      "capability": "utils-provider",
+      "name": "CS2 Menus Utils provider",
+      "version": "853df6fddeb19520bcab980b61557005d9bea8b1",
+      "download_location": "https://github.com/Pisex/cs2-menus/tree/853df6fddeb19520bcab980b61557005d9bea8b1",
+      "purpose": "Provides the required IUtilsApi runtime interface",
+      "required": true,
+      "relationships": ["PROVIDED_DEPENDENCY_OF"]
+    },
+    {
+      "capability": "menus-provider",
+      "name": "CS2 Menus menu provider",
+      "version": "853df6fddeb19520bcab980b61557005d9bea8b1",
+      "download_location": "https://github.com/Pisex/cs2-menus/tree/853df6fddeb19520bcab980b61557005d9bea8b1",
+      "purpose": "Provides the required IMenusApi runtime interface",
+      "required": true,
+      "relationships": ["PROVIDED_DEPENDENCY_OF"]
+    },
+    {
+      "capability": "players-provider",
+      "name": "CS2 Menus players provider",
+      "version": "853df6fddeb19520bcab980b61557005d9bea8b1",
+      "download_location": "https://github.com/Pisex/cs2-menus/tree/853df6fddeb19520bcab980b61557005d9bea8b1",
+      "purpose": "Provides the required IPlayersApi runtime interface",
+      "required": true,
+      "relationships": ["PROVIDED_DEPENDENCY_OF"]
+    },
+    {
+      "capability": "sqlmm-provider",
+      "name": "SQLMM provider",
+      "version": "ed529d9a34d149fbe45c8813bc1bfdaff1690f1d",
+      "download_location": "https://github.com/zer0k-z/sql_mm/tree/ed529d9a34d149fbe45c8813bc1bfdaff1690f1d",
+      "purpose": "Provides the required SQLInterface database runtime",
+      "required": true,
+      "relationships": ["RUNTIME_DEPENDENCY_OF"]
+    },
+    {
+      "capability": "cookies-provider",
+      "name": "CS2 Menus cookies provider",
+      "version": "853df6fddeb19520bcab980b61557005d9bea8b1",
+      "download_location": "https://github.com/Pisex/cs2-menus/tree/853df6fddeb19520bcab980b61557005d9bea8b1",
+      "purpose": "Optionally provides ICookiesApi; the local KeyValues backend remains available",
+      "required": false,
+      "relationships": ["OPTIONAL_DEPENDENCY_OF"]
+    }
+  ]
+}
