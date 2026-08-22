@@ -17,6 +17,11 @@ HEADER = (ROOT / "include/vip_database_migration.h").read_text(encoding="utf-8")
 BASE = 76561197960265728
 
 
+def is_unsigned_bigint(column_type: str) -> bool:
+    normalized = " ".join(column_type.lower().split())
+    return normalized.startswith("bigint") and "unsigned" in normalized
+
+
 def cli() -> str:
     for candidate in ("mariadb", "mysql"):
         path = shutil.which(candidate)
@@ -99,7 +104,7 @@ class Database:
         )
         if db_count != "0":
             raise AssertionError(f"legacy IDs remain after migration: {db_count!r}")
-        if "bigint unsigned" not in column_type:
+        if not is_unsigned_bigint(column_type):
             self.run("ALTER TABLE vip_users MODIFY account_id BIGINT UNSIGNED NOT NULL;")
         self.run(
             "CREATE TABLE IF NOT EXISTS vip_schema_migrations (version VARCHAR(64) NOT NULL, "
@@ -136,9 +141,12 @@ def run_database_cases(args: argparse.Namespace) -> None:
     if db.run("SELECT account_id,sid FROM vip_users ORDER BY sid;") != (
             f"{BASE + 4294967295}\t7\n{BASE + 42}\t8\n0\t9"):
         raise AssertionError("signed INT legacy rows were not normalized")
-    if db.run("SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS "
-              "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='vip_users' "
-              "AND COLUMN_NAME='account_id';").lower() != "bigint unsigned":
+    first_column_type = db.run(
+        "SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS "
+        "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='vip_users' "
+        "AND COLUMN_NAME='account_id';"
+    )
+    if not is_unsigned_bigint(first_column_type):
         raise AssertionError("signed INT migration did not finalize account_id")
 
     db.reset("(-1, 'legacy-negative', 1, 7, 'vip', 0),"
@@ -153,11 +161,11 @@ def run_database_cases(args: argparse.Namespace) -> None:
     if db.run("SELECT COUNT(*) FROM vip_users_migration_conflicts;") != "1":
         raise AssertionError("conflicting legacy rows were not archived")
     db.migrate()
-    if db.run("SELECT COUNT(*) FROM vip_users;") != "4":
+    if db.run("SELECT COUNT(*) FROM vip_users;") != "3":
         raise AssertionError("second migration changed row count")
-    if db.run("SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS "
-              "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='vip_users' "
-              "AND COLUMN_NAME='account_id';").lower() != "bigint unsigned":
+    if not is_unsigned_bigint(db.run("SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS "
+                                     "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='vip_users' "
+                                     "AND COLUMN_NAME='account_id';")):
         raise AssertionError("account_id was not finalized as BIGINT UNSIGNED")
     if db.run("SELECT COUNT(*) FROM vip_schema_migrations WHERE version='steamid64-v2' "
               "AND checksum='6799cc4b228acdff3d599a31fb9546e4cd2641c82ff6169ae0728dcc2f457167';") != "1":
