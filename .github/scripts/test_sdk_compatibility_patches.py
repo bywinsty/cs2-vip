@@ -29,10 +29,10 @@ class SdkCompatibilityPatcherTests(unittest.TestCase):
             sdk / "public/game/server/.keep": "required include root\n",
             schema / "globaltypes.h": '#include "schemasystem.h"\n',
             schema / "schemasystem.cpp": (
-                "NetworkStateChanged_t value;\n"
-                "NetworkStateChanged_t other;\n"
-                "NetworkStateChanged_t third;\n"
-                "NetworkStateChanged_t fourth;\n"
+                "NetworkStateChanged_t data(nOffset);\n"
+                "NetworkStateChanged_t data(nOffset);\n"
+                "// NetworkStateChangedData already in comment\n"
+                "NetworkStateChanged_t(nLocalOffset);\n"
             ),
             schema / "CCSPlayerPawn.h": "FL_PAWN_FAKECLIENT\n",
             schema / "CCSPlayerController.h": "FL_CONTROLLER_FAKECLIENT\n",

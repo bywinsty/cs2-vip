@@ -148,9 +148,14 @@ def main() -> int:
     ensure_include(schema / "globaltypes.h")
     replace_or_verify(
         schema / "schemasystem.cpp",
-        "NetworkStateChanged_t",
-        "NetworkStateChangedData",
-        expected_count=4,
+        "NetworkStateChanged_t data",
+        "NetworkStateChangedData data",
+        expected_count=2,
+    )
+    replace_or_verify(
+        schema / "schemasystem.cpp",
+        "NetworkStateChanged_t(nLocalOffset",
+        "NetworkStateChangedData(nLocalOffset",
     )
     replace_or_verify(schema / "CCSPlayerPawn.h", "FL_PAWN_FAKECLIENT", "FL_BOT")
     replace_or_verify(schema / "CCSPlayerController.h", "FL_CONTROLLER_FAKECLIENT", "FL_FAKECLIENT")
