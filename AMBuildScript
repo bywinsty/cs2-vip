@@ -1,4 +1,5 @@
 # vim: set sts=2 ts=8 sw=2 tw=99 et ft=python:
+import datetime
 import os, sys
 
 def ResolveEnvPath(env, folder):
@@ -53,6 +54,15 @@ class MMSPluginConfig(object):
     self.sdk_targets = []
     self.binaries = []
     self.mms_root = mms_root
+    self.schemaentity_root = os.path.abspath(os.path.normpath(builder.options.schemaentity_root))
+    if not os.path.isfile(os.path.join(self.schemaentity_root, 'schemasystem.cpp')):
+      raise Exception('Invalid --schemaentity-root: schemasystem.cpp is missing')
+    source_date_epoch = os.environ.get('SOURCE_DATE_EPOCH', '')
+    if not source_date_epoch.isdigit():
+      raise Exception('SOURCE_DATE_EPOCH must be set to a non-negative integer')
+    self.build_date = datetime.datetime.fromtimestamp(
+      int(source_date_epoch), datetime.timezone.utc
+    ).strftime('%Y-%m-%d')
     self.all_targets = []
     self.target_archs = set()
 
@@ -134,8 +144,20 @@ class MMSPluginConfig(object):
         '-Wno-switch',
         '-msse',
         '-fPIC',
-        '-frtti'
+        '-frtti',
+        '-fstack-protector-strong',
+        '-Wdate-time',
       ]
+
+      for path in (os.path.abspath(builder.sourcePath), os.path.abspath(builder.buildPath)):
+        cxx.cflags += [
+          '-ffile-prefix-map={}=.'.format(path),
+          '-fdebug-prefix-map={}=.'.format(path),
+          '-fmacro-prefix-map={}=.'.format(path),
+        ]
+
+      cxx.defines += ['_FORTIFY_SOURCE=3']
+      cxx.defines += ['VIP_BUILD_DATE=\"{}\"'.format(self.build_date)]
 
       cxx.cxxflags += ['-std=c++17']
       if (cxx.version >= 'gcc-4.0') or cxx.family == 'clang':
@@ -235,7 +257,11 @@ class MMSPluginConfig(object):
         cxx.linkflags += ['-static-libgcc']
       elif cxx.family == 'clang':
         cxx.linkflags += ['-lgcc_eh']
-      cxx.linkflags += ['-static-libstdc++']
+      cxx.linkflags += [
+        '-static-libstdc++',
+        '-Wl,-z,relro,-z,now,-z,noexecstack',
+        '-Wl,--build-id=sha1',
+      ]
     elif cxx.target.platform == 'windows':
       cxx.defines += ['WIN32', '_WINDOWS']
 

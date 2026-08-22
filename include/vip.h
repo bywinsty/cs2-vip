@@ -1,11 +1,13 @@
 #pragma once
 
-#include <playerslot.h>
-#include "igameevents.h"
 #include <functional>
 #include <string>
 
-#define VIP_INTERFACE "IVIPApi"
+class CGameEntitySystem;
+
+#define VIP_INTERFACE_LEGACY "IVIPApi"
+#define VIP_INTERFACE_V2 "IVIPApi002"
+#define VIP_INTERFACE VIP_INTERFACE_V2
 
 enum VIP_ValueType
 {
@@ -46,7 +48,9 @@ typedef std::function<void(int iSlot, bool bIsVIP)> ClientLoadedOrDisconnectCall
 typedef std::function<void(int iSlot)> VIPAddCallbackFunc;
 typedef std::function<void(int iSlot, int iReason)> VIPRemoveCallbackFunc;
 
-class IVIPApi
+// ABI contract: never append virtual methods to IVIPApi001. New API revisions
+// must derive from the previous revision and use a new interface string.
+class IVIPApi001
 {
 public:
 	virtual bool VIP_IsVIPLoaded() = 0;
@@ -94,5 +98,12 @@ public:
 								ItemTogglableCallback	Item_togglable_callback	= nullptr,
 								ItemDisplayCallback		Item_display_callback	= nullptr) = 0;
 
+};
+
+class IVIPApi002 : public IVIPApi001
+{
+public:
 	virtual void VIP_OpenMenu(int iSlot) = 0;
 };
+
+using IVIPApi = IVIPApi002;

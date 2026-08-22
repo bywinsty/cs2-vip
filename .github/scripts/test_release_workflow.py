@@ -1,70 +1,82 @@
-"""Static contract tests for the Core release workflow."""
+"""Static contracts for candidate attestation and release promotion workflows."""
 
 from pathlib import Path
 import unittest
 
 
-WORKFLOW = Path(__file__).resolve().parents[1] / "workflows" / "build.yml"
+WORKFLOWS = Path(__file__).resolve().parents[1] / "workflows"
 
 
 class ReleaseWorkflowContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.workflow = WORKFLOW.read_text(encoding="utf-8")
-        marker = "  publish-release:\n"
-        if marker not in cls.workflow:
-            raise AssertionError("publish-release job is missing")
-        cls.release_job = cls.workflow.split(marker, 1)[1]
+        cls.build = (WORKFLOWS / "build.yml").read_text(encoding="utf-8")
+        cls.preflight = (WORKFLOWS / "runtime-release-preflight.yml").read_text(encoding="utf-8")
+        cls.promotion = (WORKFLOWS / "promote-core-release.yml").read_text(encoding="utf-8")
+        cls.publish = cls.build.split("  publish-release:\n", 1)[1]
+        cls.candidate = cls.build.split("  attest-candidate:\n", 1)[1].split("  publish-release:\n", 1)[0]
 
-    def test_push_and_pull_request_branches(self):
-        self.assertIn(
-            "push:\n    branches:\n      - Core\n      - dev-core",
-            self.workflow,
-        )
-        self.assertIn(
-            "pull_request:\n    branches:\n      - Core",
-            self.workflow,
-        )
-        self.assertNotIn("      - main", self.workflow)
-        self.assertNotIn("      - dev\n", self.workflow)
-        self.assertNotIn("\n  release:\n", self.workflow)
+    def test_pr_core_and_dev_push_contract(self):
+        self.assertIn("      - Core\n      - PR\n      - dev", self.build)
+        self.assertIn("pull_request:\n    branches:\n      - Core", self.build)
+        self.assertIn("github.ref_name == 'PR' || github.ref_name == 'Core'", self.candidate)
+        self.assertNotIn("github.ref_name == 'dev'", self.candidate)
 
-    def test_release_runs_only_after_successful_pair_branch_push(self):
-        self.assertIn("github.event_name == 'push'", self.release_job)
-        self.assertIn("github.ref_name == 'Core'", self.release_job)
-        self.assertIn("github.ref_name == 'dev-core'", self.release_job)
-        self.assertIn("needs.build.result == 'success'", self.release_job)
-        self.assertNotIn("github.event_name == 'release'", self.workflow)
-        self.assertNotIn("workflow_dispatch", self.release_job)
+    def test_candidates_receive_three_attestations_with_minimal_permissions(self):
+        self.assertIn("contents: read\n      id-token: write\n      attestations: write", self.candidate)
+        self.assertEqual(self.candidate.count("uses: actions/attest@"), 3)
+        self.assertIn("subject-path: candidate/vip.zip", self.candidate)
+        self.assertIn("sbom-path: candidate/vip.spdx.json", self.candidate)
+        self.assertIn("subject-path: candidate/vip.spdx.json", self.candidate)
+        self.assertIn("exact candidate subjects", self.candidate.lower())
 
-    def test_dynamic_tag_and_branch_tip_guard(self):
-        self.assertIn("RELEASE_TAG:", self.release_job)
-        self.assertIn("RELEASE_TITLE:", self.release_job)
-        self.assertIn("git/ref/heads/$GITHUB_REF_NAME", self.release_job)
-        self.assertIn("update_release_tag.sh", self.release_job)
-        self.assertIn('gh release delete "$RELEASE_TAG"', self.release_job)
-        self.assertNotIn('--target "$GITHUB_SHA"', self.release_job)
-        self.assertNotIn("--cleanup-tag", self.release_job)
-        self.assertIn("IS_PRERELEASE:", self.release_job)
-        self.assertIn("dev-core", self.release_job)
-        self.assertIn("--prerelease", self.release_job)
+    def test_automatic_publication_is_dev_only(self):
+        self.assertIn("github.ref_name == 'dev'", self.publish)
+        self.assertNotIn("github.ref_name == 'Core'", self.publish)
+        self.assertNotIn("RUNTIME_VALIDATION_SHA", self.publish)
+        self.assertIn('IS_PRERELEASE: "true"', self.publish)
+        self.assertIn("gh release upload", self.publish)
+        self.assertIn("gh release download", self.publish)
+        self.assertIn("cmp \"release-files/$name\"", self.publish)
 
-    def test_release_permissions_and_asset_validation(self):
-        self.assertEqual(self.workflow.count("contents: write"), 1)
-        self.assertIn("GH_TOKEN:", self.release_job)
-        self.assertIn("github.token", self.release_job)
-        self.assertIn("group: release-", self.release_job)
-        self.assertIn("cancel-in-progress: false", self.release_job)
-        self.assertIn("zip -T release-files/*.zip", self.release_job)
-        self.assertIn("sha256sum release-files/*.zip", self.release_job)
-        self.assertIn("gh release upload", self.release_job)
-        self.assertIn("Verify release assets", self.release_job)
-        self.assertIn('test "$(gh release view "$RELEASE_TAG"', self.release_job)
-        self.assertIn("test_update_release_tag.py", self.workflow)
+    def test_every_verification_triplet_uses_explicit_spdx_predicate(self):
+        for workflow in (self.build, self.preflight, self.promotion):
+            with self.subTest(workflow=workflow[:40]):
+                self.assertIn("--predicate-type https://spdx.dev/Document/v2.3", workflow)
+                self.assertIn("vip.spdx.json", workflow)
 
-    def test_no_legacy_release_configuration(self):
-        self.assertNotIn("1.0-bywinsty", self.workflow)
-        self.assertNotIn("github.event.release", self.workflow)
+    def test_runtime_preflight_tag_is_a_closed_choice(self):
+        self.assertIn("type: choice", self.preflight)
+        self.assertIn("options:\n          - dev\n          - Core", self.preflight)
+
+    def test_stable_promotion_requires_exact_core_run_and_runtime_evidence(self):
+        for text in (
+            "build_run_id",
+            "github.ref_name == 'Core'",
+            "RUNTIME_VALIDATION_SHA",
+            "RUNTIME_VALIDATION_REPORT_URL",
+            "headBranch",
+            "headSha",
+            "event",
+            "conclusion",
+            'workflowName\' <<<"$run_json")" = "Build AMBuild Plugin"',
+            "gh run download",
+            "--name compile",
+            "update_release_tag.sh",
+            "gh release download",
+        ):
+            self.assertIn(text, self.promotion)
+        self.assertNotIn("pull_request", self.promotion)
+        self.assertNotIn("actions/attest@", self.promotion)
+
+    def test_release_assets_are_redownloaded_and_byte_compared(self):
+        for workflow in (self.publish, self.promotion):
+            with self.subTest(workflow=workflow[:40]):
+                self.assertIn("mktemp -d", workflow)
+                self.assertIn("stat -c '%s'", workflow)
+                self.assertIn("sha256sum", workflow)
+                self.assertIn("cmp ", workflow)
+                self.assertIn("verify_spdx_subject.py", workflow)
 
 
 if __name__ == "__main__":
