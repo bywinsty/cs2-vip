@@ -189,7 +189,7 @@ jobs:
           test -f "$SCHEMA_ROOT/schemasystem.cpp"
           protoc_dir="$(mktemp -d "$RUNNER_TEMP/protoc.XXXXXX")"
           protoc_archive="$protoc_dir/protoc.zip"
-          curl --fail --location --retry 3 --retry-all-errors \
+          curl --fail --location --retry 3 --retry-delay 2 \
             "https://github.com/protocolbuffers/protobuf/releases/download/v$PROTOC_VERSION/protoc-$PROTOC_VERSION-linux-x86_64.zip" \
             --output "$protoc_archive"
           printf '%s  %s\n' "$PROTOC_ARCHIVE_SHA256" "$protoc_archive" | sha256sum --check --strict
