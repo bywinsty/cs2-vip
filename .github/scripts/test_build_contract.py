@@ -22,6 +22,8 @@ def main() -> int:
         failures.append("PackageScript single-target guard is missing")
     for required in (
         "BUILD_ABI", "CACHE_VERSION: \"v4\"", "GLIBC_BASELINE: \"2.28\"",
+        "PROTOC_VERSION: \"21.8\"", "PROTOC_ARCHIVE_SHA256",
+        "protocolbuffers/protobuf/releases/download/v$PROTOC_VERSION", "sha256sum --check --strict",
         "CC: gcc", "CXX: g++", "--max-glibc \"$GLIBC_BASELINE\"",
         'safe.directory "$GITHUB_WORKSPACE"',
         "/__w/_temp/vip-dependencies", "/__w/_temp/pip-cache",
@@ -41,12 +43,12 @@ def main() -> int:
     )
     if re.search(image_pattern, workflow) is None:
         failures.append("manylinux_2_28 build image must be pinned by a full sha256 digest")
+    if re.search(r'PROTOC_ARCHIVE_SHA256: "[0-9a-f]{64}"', workflow) is None:
+        failures.append("the compatible protoc archive must be pinned by a full sha256 digest")
     if workflow.count('--max-glibc "$GLIBC_BASELINE"') != 2:
         failures.append("both release builds must enforce the GLIBC baseline")
     if "/opt/python/cp312-cp312/bin" not in prepare_tools:
         failures.append("build tools must use the Python bundled with the manylinux image")
-    if "g++ -print-file-name=libstdc++.so.6" not in prepare_tools or "LD_LIBRARY_PATH" not in prepare_tools:
-        failures.append("manylinux host tools must resolve the GCC 14 runtime libraries")
     if "actions/setup-python@" in prepare_tools:
         failures.append("manylinux build must not inject a host-glibc Python runtime")
     for required in ("-fstack-protector-strong", "_FORTIFY_SOURCE=2", "-Wdate-time", "-ffile-prefix-map", "-z,relro,-z,now,-z,noexecstack"):

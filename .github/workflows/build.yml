@@ -23,6 +23,8 @@ env:
   CACHE_VERSION: "v4"
   BUILD_ABI: "manylinux_2_28_x86_64-gcc14"
   GLIBC_BASELINE: "2.28"
+  PROTOC_VERSION: "21.8"
+  PROTOC_ARCHIVE_SHA256: "f90d0dd59065fef94374745627336d622702b67f0319f96cee894d41a974d47a"
 
 jobs:
   build:
@@ -185,6 +187,14 @@ jobs:
           test -f "$manifest_path/SdkHelpers.ambuild"
           test -f "$manifest_path/manifests/cs2.json"
           test -f "$SCHEMA_ROOT/schemasystem.cpp"
+          protoc_dir="$(mktemp -d "$RUNNER_TEMP/protoc.XXXXXX")"
+          protoc_archive="$protoc_dir/protoc.zip"
+          curl --fail --location --retry 3 --retry-all-errors \
+            "https://github.com/protocolbuffers/protobuf/releases/download/v$PROTOC_VERSION/protoc-$PROTOC_VERSION-linux-x86_64.zip" \
+            --output "$protoc_archive"
+          printf '%s  %s\n' "$PROTOC_ARCHIVE_SHA256" "$protoc_archive" | sha256sum --check --strict
+          unzip -q "$protoc_archive" -d "$protoc_dir/extracted"
+          install -m 0755 "$protoc_dir/extracted/bin/protoc" "$HL2SDK_ROOT/hl2sdk-cs2/devtools/bin/linux/protoc"
           "$HL2SDK_ROOT/hl2sdk-cs2/devtools/bin/linux/protoc" --version | grep -Fx 'libprotoc 3.21.8'
 
       - name: Set reproducible build epoch

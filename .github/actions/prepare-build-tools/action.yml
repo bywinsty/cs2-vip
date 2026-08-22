@@ -15,19 +15,13 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Select bundled manylinux toolchain
+    - name: Select bundled manylinux Python
       shell: bash
       run: |
         set -euo pipefail
         python_bin=/opt/python/cp312-cp312/bin
         test -x "$python_bin/python"
-        libstdcpp="$(g++ -print-file-name=libstdc++.so.6)"
-        test "$libstdcpp" != libstdc++.so.6
-        test -e "$libstdcpp"
         printf '%s\n' "$python_bin" >> "$GITHUB_PATH"
-        runtime_path="$(dirname "$libstdcpp")"
-        if [[ -n "${LD_LIBRARY_PATH:-}" ]]; then runtime_path="$runtime_path:$LD_LIBRARY_PATH"; fi
-        printf 'LD_LIBRARY_PATH=%s\n' "$runtime_path" >> "$GITHUB_ENV"
     - name: Install missing system packages
       id: package-audit
       shell: bash
