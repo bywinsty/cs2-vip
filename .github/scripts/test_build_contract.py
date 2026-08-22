@@ -32,6 +32,7 @@ def main() -> int:
         "external/SchemaEntity", "update_release_tag.sh", "SDK_CACHE_MATCHED_KEY",
         "PIP_CACHE_MATCHED_KEY", "prepare-build-tools.outputs.python-version",
         "libprotoc 3.21.8",
+        "/__w/_temp/vip.zip", "/__w/_temp/vip.spdx.json",
         "--schemaentity-root", "--disable-debug", "SOURCE_DATE_EPOCH", "create_reproducible_archive.py",
         "verify_elf_hardening.py", "test_verify_elf_hardening.py",
         "cmp build/package/addons/vip/vip.so", "--require-hashes",
@@ -48,6 +49,8 @@ def main() -> int:
         failures.append("the compatible protoc archive must be pinned by a full sha256 digest")
     if workflow.count('--max-glibc "$GLIBC_BASELINE"') != 2:
         failures.append("both release builds must enforce the GLIBC baseline")
+    if "${{ runner.temp }}/vip" in workflow:
+        failures.append("container artifacts must not use the host runner.temp expression")
     if "/opt/python/cp312-cp312/bin" not in prepare_tools:
         failures.append("build tools must use the Python bundled with the manylinux image")
     if "actions/setup-python@" in prepare_tools:

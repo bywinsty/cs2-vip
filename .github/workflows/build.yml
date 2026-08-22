@@ -357,8 +357,8 @@ jobs:
         with:
           name: compile
           path: |
-            ${{ runner.temp }}/vip.zip
-            ${{ runner.temp }}/vip.spdx.json
+            /__w/_temp/vip.zip
+            /__w/_temp/vip.spdx.json
           if-no-files-found: error
           retention-days: 30
 
