@@ -1,5 +1,5 @@
 name: Prepare build tools
-description: Configure pinned Python and install missing Linux build tools.
+description: Configure pinned Python and validate the manylinux build toolchain.
 
 outputs:
   python-version:
@@ -25,16 +25,24 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        required_packages=(binutils clang-18 file git unzip zip)
+        required_commands=(readelf gcc g++ file git unzip zip)
         missing_packages=()
-        for package in "${required_packages[@]}"; do
-          status="$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)"
-          if [[ "$status" != "install ok installed" ]]; then missing_packages+=("$package"); fi
+        for command in "${required_commands[@]}"; do
+          if ! command -v "$command" >/dev/null; then missing_packages+=("$command"); fi
         done
         apt_updated=false
         if ((${#missing_packages[@]} > 0)); then
-          sudo apt-get update -qy
-          sudo apt-get install -y "${missing_packages[@]}"
+          if command -v dnf >/dev/null; then
+            dnf -y install binutils gcc gcc-c++ file git unzip zip
+          elif command -v apt-get >/dev/null; then
+            privilege=()
+            if [[ "$(id -u)" != "0" ]]; then privilege=(sudo); fi
+            "${privilege[@]}" apt-get update -qy
+            "${privilege[@]}" apt-get install -y binutils gcc g++ file git unzip zip
+          else
+            printf 'missing build commands and no supported package manager: %s\n' "${missing_packages[*]}" >&2
+            exit 1
+          fi
           apt_updated=true
         fi
         printf 'missing-apt-packages=%s\n' "${missing_packages[*]}" >> "$GITHUB_OUTPUT"
@@ -46,4 +54,4 @@ runs:
         set -euo pipefail
         python_version="$(python --version 2>&1 | awk '{print $2}')"
         printf 'python-version=%s\n' "$python_version" >> "$GITHUB_OUTPUT"
-        for command in clang-18 clang++-18 git zip unzip file; do command -v "$command" >/dev/null; done
+        for command in readelf gcc g++ git zip unzip file; do command -v "$command" >/dev/null; done

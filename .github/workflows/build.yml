@@ -20,13 +20,20 @@ env:
   HL2SDK_REF: "80cf8554d716a3841fe0680013cae3411a056a8d"
   SCHEMAENTITY_REF: "e7965b3c83ec684d44584ee6457c5482ee5d9db1"
   MANIFEST_REF: "20b3a014264b38908c4a5d4eb263ba2c488f3dc1"
-  CACHE_VERSION: "v2"
+  CACHE_VERSION: "v3"
+  BUILD_ABI: "manylinux_2_28_x86_64-gcc14"
+  GLIBC_BASELINE: "2.28"
 
 jobs:
   build:
     name: Build VIP Core
     if: "!contains(github.event.head_commit.message || '', '[skip ci]')"
     runs-on: ubuntu-24.04
+    container:
+      image: quay.io/pypa/manylinux_2_28_x86_64@sha256:0c87ccb5996dab6c3b7612ee4fda7b80c4ab3c44a86c2541e4a872afdf4f131b
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Configure Git defaults
@@ -65,8 +72,11 @@ jobs:
 
       - name: Compile public ABI probes
         run: |
-          clang++-18 -std=c++17 -fsyntax-only tests/abi_legacy_probe.cpp
-          clang++-18 -std=c++17 -fsyntax-only tests/abi_v2_probe.cpp
+          g++ -std=c++17 -fsyntax-only tests/abi_legacy_probe.cpp
+          g++ -std=c++17 -fsyntax-only tests/abi_v2_probe.cpp
+
+      - name: Test ELF compatibility verifier
+        run: python .github/scripts/test_verify_elf_hardening.py
 
       - name: Check SteamID64 persistence contract
         run: python tests/test_steamid64.py
@@ -88,7 +98,7 @@ jobs:
           path: |
             ${{ runner.temp }}/vip-dependencies/ambuild
             ${{ runner.temp }}/vip-dependencies/external
-          key: ${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-ubuntu24.04-${{ env.AMBUILD_REF }}-${{ env.MMS_REF }}-${{ env.HL2SDK_REF }}-${{ env.SCHEMAENTITY_REF }}-${{ env.MANIFEST_REF }}
+          key: ${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-${{ env.BUILD_ABI }}-${{ env.AMBUILD_REF }}-${{ env.MMS_REF }}-${{ env.HL2SDK_REF }}-${{ env.SCHEMAENTITY_REF }}-${{ env.MANIFEST_REF }}
 
       - name: Prepare pinned dependencies
         if: steps.restore-dependencies.outputs.cache-hit != 'true'
@@ -140,7 +150,7 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.cache/pip
-          key: pip-${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-ubuntu24.04-py312-${{ hashFiles('.github/ci-requirements.txt') }}
+          key: pip-${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-${{ env.BUILD_ABI }}-py312-${{ hashFiles('.github/ci-requirements.txt') }}
 
       - name: Install pinned Python dependencies
         run: |
@@ -155,7 +165,7 @@ jobs:
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.cache/pip
-          key: pip-${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-ubuntu24.04-py312-${{ hashFiles('.github/ci-requirements.txt') }}
+          key: pip-${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-${{ env.BUILD_ABI }}-py312-${{ hashFiles('.github/ci-requirements.txt') }}
 
       - name: Prepare and validate SDK compatibility patches
         run: |
@@ -178,8 +188,8 @@ jobs:
 
       - name: Configure and build plugin
         env:
-          CC: clang-18
-          CXX: clang++-18
+          CC: gcc
+          CXX: g++
         run: |
           set -euo pipefail
           rm -rf build
@@ -200,6 +210,7 @@ jobs:
         run: >-
           python .github/scripts/verify_elf_hardening.py
           build/package/addons/vip/vip.so
+          --max-glibc "$GLIBC_BASELINE"
           --library-path "$HL2SDK_ROOT/hl2sdk-cs2/lib/linux64"
 
       - name: Validate and create archive
@@ -229,8 +240,8 @@ jobs:
 
       - name: Rebuild independently and compare digests
         env:
-          CC: clang-18
-          CXX: clang++-18
+          CC: gcc
+          CXX: g++
         run: |
           set -euo pipefail
           rm -rf build-repro
@@ -249,6 +260,7 @@ jobs:
           cd ..
           python .github/scripts/verify_elf_hardening.py \
             build-repro/package/addons/vip/vip.so \
+            --max-glibc "$GLIBC_BASELINE" \
             --library-path "$HL2SDK_ROOT/hl2sdk-cs2/lib/linux64"
           cmp build/package/addons/vip/vip.so build-repro/package/addons/vip/vip.so
           python .github/scripts/create_reproducible_archive.py \
