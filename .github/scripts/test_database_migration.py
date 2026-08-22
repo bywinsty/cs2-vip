@@ -125,10 +125,26 @@ class StaticMigrationContractTests(unittest.TestCase):
 def run_database_cases(args: argparse.Namespace) -> None:
     db = Database(args)
     db.run("SET SESSION sql_mode='STRICT_ALL_TABLES,NO_ZERO_DATE,NO_ZERO_IN_DATE';")
+
+    # A legacy INT SIGNED schema cannot contain SteamID64 values. Verify its
+    # negative and positive account IDs are widened before normalization.
+    db.reset("(-1, 'legacy-negative', 1, 7, 'vip', 0),"
+             "(42, 'legacy-positive', 3, 8, 'vip', 0),"
+             "(0, 'zero', 4, 9, 'vip', 0)", "INT SIGNED")
+    db.migrate()
+    if db.run("SELECT account_id,sid FROM vip_users ORDER BY sid;") != (
+            f"{BASE + 4294967295}\t7\n{BASE + 42}\t8\n0\t9"):
+        raise AssertionError("signed INT legacy IDs were not normalized")
+    db.migrate()
+    if db.run("SELECT COUNT(*) FROM vip_users;") != "3":
+        raise AssertionError("second signed INT migration changed row count")
+
+    # Mixed legacy and canonical SteamID64 rows require a signed BIGINT
+    # source schema. The canonical SteamID64 row is the deterministic winner.
     db.reset("(-1, 'legacy-negative', 1, 7, 'vip', 0),"
              f"({BASE + 4294967295}, 'canonical', 2, 7, 'vip', 0),"
              "(42, 'legacy-positive', 3, 8, 'vip', 0),"
-             "(0, 'zero', 4, 9, 'vip', 0)")
+             "(0, 'zero', 4, 9, 'vip', 0)", "BIGINT SIGNED")
     db.migrate()
     rows = db.run("SELECT account_id,sid FROM vip_users ORDER BY sid;")
     expected = f"{BASE + 4294967295}\t7\n{BASE + 42}\t8\n0\t9"
@@ -137,7 +153,7 @@ def run_database_cases(args: argparse.Namespace) -> None:
     if db.run("SELECT COUNT(*) FROM vip_users_migration_conflicts;") != "1":
         raise AssertionError("conflicting legacy rows were not archived")
     db.migrate()
-    if db.run("SELECT COUNT(*) FROM vip_users;") != "4":
+    if db.run("SELECT COUNT(*) FROM vip_users;") != "3":
         raise AssertionError("second migration changed row count")
     if db.run("SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS "
               "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='vip_users' "
@@ -152,14 +168,14 @@ def run_database_cases(args: argparse.Namespace) -> None:
     db.reset("(-1, 'legacy-negative', 1, 7, 'vip', 0),"
              f"({BASE + 4294967295}, 'canonical', 2, 7, 'vip', 0),"
              "(-4294967254, 'negative-legacy', 6, 11, 'vip', 0),"
-             f"({BASE + 42}, 'canonical-42', 7, 11, 'vip', 0),"
+             "(42, 'positive-legacy', 7, 11, 'vip', 0),"
              "(0, 'zero', 4, 9, 'vip', 0),"
              "(9000000000000000000, 'unknown', 5, 10, 'vip', 0)", "BIGINT SIGNED")
     db.migrate()
     if db.run("SELECT account_id,name,sid FROM vip_users ORDER BY sid;") != (
             f"{BASE + 4294967295}\tcanonical\t7\n0\tzero\t9\n"
             "9000000000000000000\tunknown\t10\n"
-            f"{BASE + 42}\tcanonical-42\t11"):
+            f"{BASE + 42}\tpositive-legacy\t11"):
         raise AssertionError("positive legacy representation did not win")
     if db.run("SELECT COUNT(*) FROM vip_users_migration_conflicts;") != "2":
         raise AssertionError("legacy conflict archive was not preserved")
